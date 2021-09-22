@@ -86,48 +86,48 @@ class DOMSanitizer
         return preg_replace('~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i', '', $document->saveHTML());
     }
 
-    protected function isSpecialCase($attr_name)
+    protected function isSpecialCase($attr_name): bool
     {
         return $this->startsWith($attr_name, self::$special_cases);
     }
 
-    protected function isExternalUrl($attr_value)
+    protected function isExternalUrl($attr_value): bool
     {
         return preg_match(self::EXTERNAL_URL, $attr_value);
     }
 
-    protected function isJavascriptAttribute($attr_name, $attr_value)
+    protected function isJavascriptAttribute($attr_name, $attr_value): bool
     {
         return in_array($attr_name, ['href','xlink:href']) && preg_match(self::JAVASCRIPT_ATTR, $attr_value);
     }
 
-    protected function isSneakyOnload($attr_name, $attr_value)
+    protected function isSneakyOnload($attr_name, $attr_value): bool
     {
         return in_array($attr_name, ['href','xlink:href']) && preg_match(self::SNEAKY_ONLOAD, $attr_value);
     }
 
-    public function addAllowedTags(array $allowed_tags)
+    public function addAllowedTags(array $allowed_tags): void
     {
         $this->allowed_tags = array_unique(array_merge(array_map('strtolower', $allowed_tags), $this->allowed_tags));
     }
 
-    public function addAllowedAttributes(array $allowed_attributes)
+    public function addAllowedAttributes(array $allowed_attributes): void
     {
         $this->allowed_attributes = array_unique(array_merge(array_map('strtolower', $allowed_attributes), $this->allowed_attributes));
     }
 
-    public function addDisallowedTags(array $disallowed_tags)
+    public function addDisallowedTags(array $disallowed_tags): void
     {
         $this->disallowed_tags = array_unique(array_merge(array_map('strtolower', $disallowed_tags), $this->disallowed_tags));
     }
 
-    public function addDisallowedAttributes(array $disallowed_attributes)
+    public function addDisallowedAttributes(array $disallowed_attributes): void
     {
         $this->disallowed_attributes = array_unique(array_merge(array_map('strtolower', $disallowed_attributes), $this->disallowed_attributes));
     }
 
     /**
-     * @return array
+     * @return array|string[]
      */
     public function getAllowedTags(): array
     {
@@ -135,7 +135,7 @@ class DOMSanitizer
     }
 
     /**
-     * @param array $allowed_tags
+     * @param array|string[] $allowed_tags
      */
     public function setAllowedTags(array $allowed_tags): void
     {
@@ -175,15 +175,15 @@ class DOMSanitizer
     }
 
     /**
-     * @return mixed
+     * @return array|string[]
      */
-    public function getDisallowedAttributes()
+    public function getDisallowedAttributes(): array
     {
         return $this->disallowed_attributes;
     }
 
     /**
-     * @param mixed $disallowed_attributes
+     * @param array|string[] $disallowed_attributes
      */
     public function setDisallowedAttributes($disallowed_attributes): void
     {
