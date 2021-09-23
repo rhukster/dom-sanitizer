@@ -10,6 +10,25 @@ This borrows the extensive list of valid tags and attributes in the excellent [D
 composer require rhukster/dom-sanitizer
 ```
 
+## Options
+
+Options can be passed to the `sanitize()` method as an optional array.  Default values are:
+
+```php
+$options = [
+    'remove-namespaces' => false,
+    'remove-php-tags' => true,
+    'remove-wrapper-tags' => true,
+    'compress-output' => true,
+];
+```
+
+for example:
+
+```php
+
+```
+
 ## Usage
 
 ### Sanitizing HTML
@@ -17,11 +36,14 @@ composer require rhukster/dom-sanitizer
 The default option but provides with the full list of HTML tags and attributes.
 
 ```php
-require Rhukster/DomSanitizer/DomSanitizer
+require 'vendor/autoload.php';
 
-$bad_html = file_get_contents('bad.html');
-$sanitizer = new DOMSanitizer();
-$good_html = $sanitizer->sanitize($bad_html);
+use Rhukster\DomSanitizer\DOMSanitizer;
+
+$sanitizer = new DOMSanitizer(DOMSanitizer::HTML);
+$cleaned = $sanitizer->sanitize($bad_html, [
+    'remove-wrapper-tags' => false,
+]);
 ```
 
 ### Sanitizing SVG
@@ -29,7 +51,9 @@ $good_html = $sanitizer->sanitize($bad_html);
 You can limit the valid tags and attributes by passing `DOMSanitizer::SVG` to the constructor.  This is advisable if you know you are dealing with SVGs.
 
 ```php
-require Rhukster/DomSanitizer/DomSanitizer
+require 'vendor/autoload.php';
+
+use Rhukster\DomSanitizer\DOMSanitizer;
 
 $bad_svg = file_get_contents('bad.svg');
 $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);

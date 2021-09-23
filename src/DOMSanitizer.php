@@ -10,6 +10,9 @@ class DOMSanitizer
     const EXTERNAL_URL = "/url\(\s*('|\")\s*(ftp:\/\/|http:\/\/|https:\/\/|\/\/)/i";
     const JAVASCRIPT_ATTR = "/javascript\:/i";
     const SNEAKY_ONLOAD = "/data:.*onload=/i";
+    const WRAPPER_TAGS = "~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i";
+    const WHITESPACE_FROM = ['/\>[^\S ]+/s', '/[^\S ]+\</s', '/(\s)+/s', '/> </s'];
+    const WHITESPACE_TO =  ['>', '<', '\\1', '><'];
 
     private static $root = ['html', 'body'];
     private static $html = ['a', 'abbr', 'acronym', 'address', 'area', 'article', 'aside', 'audio', 'b', 'bdi', 'bdo', 'big', 'blink', 'blockquote', 'body', 'br', 'button', 'canvas', 'caption', 'center', 'cite', 'code', 'col', 'colgroup', 'content', 'data', 'datalist', 'dd', 'decorator', 'del', 'details', 'dfn', 'dialog', 'dir', 'div', 'dl', 'dt', 'element', 'em', 'fieldset', 'figcaption', 'figure', 'font', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hgroup', 'hr', 'html', 'i', 'img', 'input', 'ins', 'kbd', 'label', 'legend', 'li', 'main', 'map', 'mark', 'marquee', 'menu', 'menuitem', 'meter', 'nav', 'nobr', 'ol', 'optgroup', 'option', 'output', 'p', 'picture', 'pre', 'progress', 'q', 'rp', 'rt', 'ruby', 's', 'samp', 'section', 'select', 'shadow', 'small', 'source', 'spacer', 'span', 'strike', 'strong', 'style', 'sub', 'summary', 'sup', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot', 'th', 'thead', 'time', 'tr', 'track', 'tt', 'u', 'ul', 'var', 'video', 'wbr'];
@@ -29,9 +32,10 @@ class DOMSanitizer
     protected $disallowed_attributes = [];
 
     protected $options = [
-        'remove_namespaces' => false, 
-        'remove_php_tags' => true,
-        'remove_wrapper_tags' => true,
+        'remove-namespaces' => false,
+        'remove-php-tags' => true,
+        'remove-wrapper-tags' => true,
+        'compress-output' => true,
     ];
 
     public function __construct(int $type = self::HTML)
@@ -58,24 +62,22 @@ class DOMSanitizer
     {
         $options = array_merge($this->options, $options);
 
-        if ($options['remove_namespaces']) {
+        if ($options['remove-namespaces']) {
             $dom_content = preg_replace('/xmlns[^=]*="[^"]*"/i', '', $dom_content);
         }
 
-        if ($options['remove_php_tags']) {
+        if ($options['remove-php-tags']) {
             $dom_content = preg_replace('/<\?(=|php)(.+?)\?>/i', '', $dom_content);
         }
 
         libxml_use_internal_errors(true);
         libxml_clear_errors();
 
-        $cleaned = new \DOMDocument();
         $document = new \DOMDocument();
         $document->loadHTML($dom_content);
         $document->preserveWhiteSpace = false;
         $document->strictErrorChecking = false;
         $document->formatOutput = true;
-
 
         $tags = array_diff($this->allowed_tags, $this->disallowed_tags);
         $attributes = array_diff($this->allowed_attributes, $this->disallowed_attributes);
@@ -100,33 +102,17 @@ class DOMSanitizer
             }
         }
 
-        if ($options['remove_wrapper_tags']) {
-            $output = preg_replace('~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i', '', $document->saveHTML());
+        if ($options['remove-wrapper-tags']) {
+            $output = preg_replace(self::WRAPPER_TAGS, '', $document->saveHTML());
         } else {
             $output = $document->saveHTML();
         }
 
+        if ($options['compress-output']) {
+            $output = preg_replace(self::WHITESPACE_FROM, self::WHITESPACE_TO, $output);
+        }
+
         return $output;
-    }
-
-    protected function isSpecialCase($attr_name): bool
-    {
-        return $this->startsWith($attr_name, self::$special_cases);
-    }
-
-    protected function isExternalUrl($attr_value): bool
-    {
-        return preg_match(self::EXTERNAL_URL, $attr_value);
-    }
-
-    protected function isJavascriptAttribute($attr_name, $attr_value): bool
-    {
-        return in_array($attr_name, ['href','xlink:href']) && preg_match(self::JAVASCRIPT_ATTR, $attr_value);
-    }
-
-    protected function isSneakyOnload($attr_name, $attr_value): bool
-    {
-        return in_array($attr_name, ['href','xlink:href']) && preg_match(self::SNEAKY_ONLOAD, $attr_value);
     }
 
     public function addAllowedTags(array $allowed_tags): void
@@ -213,7 +199,27 @@ class DOMSanitizer
         $this->disallowed_attributes = $disallowed_attributes;
     }
 
-    private function startsWith(string $haystack, $needle, bool $case_sensitive = true): bool
+    protected function isSpecialCase($attr_name): bool
+    {
+        return $this->startsWith($attr_name, self::$special_cases);
+    }
+
+    protected function isExternalUrl($attr_value): bool
+    {
+        return preg_match(self::EXTERNAL_URL, $attr_value);
+    }
+
+    protected function isJavascriptAttribute($attr_name, $attr_value): bool
+    {
+        return in_array($attr_name, ['href','xlink:href']) && preg_match(self::JAVASCRIPT_ATTR, $attr_value);
+    }
+
+    protected function isSneakyOnload($attr_name, $attr_value): bool
+    {
+        return in_array($attr_name, ['href','xlink:href']) && preg_match(self::SNEAKY_ONLOAD, $attr_value);
+    }
+
+    protected function startsWith(string $haystack, $needle, bool $case_sensitive = true): bool
     {
         $status = false;
         $compare_func = $case_sensitive ? 'mb_strpos' : 'mb_stripos';
