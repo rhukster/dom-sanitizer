@@ -19,7 +19,6 @@ final class DomSanitizerTest extends TestCase
     {
         $bad_svg = file_get_contents('./tests/bad.svg');
         $good_svg = file_get_contents('./tests/good.svg');
-
         $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
 
         $this->assertEquals(

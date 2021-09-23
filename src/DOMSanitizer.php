@@ -48,17 +48,27 @@ class DOMSanitizer
         }
     }
 
-    public function sanitize(string $dom_content, bool $remove_namespaces = false): string
+    public function sanitize(string $dom_content, bool $remove_namespaces = false, $remove_php = true): string
     {
-        libxml_use_internal_errors(true);
-        libxml_clear_errors();
 
         if ($remove_namespaces) {
             $dom_content = preg_replace('/xmlns[^=]*="[^"]*"/i', '', $dom_content);
         }
 
+        if ($remove_php) {
+            $dom_content = preg_replace('/<\?(=|php)(.+?)\?>/i', '', $dom_content);
+        }
+
+        libxml_use_internal_errors(true);
+        libxml_clear_errors();
+
+        $cleaned = new \DOMDocument();
         $document = new \DOMDocument();
         $document->loadHTML($dom_content);
+        $document->preserveWhiteSpace = false;
+        $document->strictErrorChecking = false;
+        $document->formatOutput = true;
+
 
         $tags = array_diff($this->allowed_tags, $this->disallowed_tags);
         $attributes = array_diff($this->allowed_attributes, $this->disallowed_attributes);
@@ -83,7 +93,13 @@ class DOMSanitizer
             }
         }
 
-        return preg_replace('~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i', '', $document->saveHTML());
+        $body = $document->getElementsByTagName('body')->item(0);
+        foreach($body->childNodes as $child) {
+            $cleaned->appendChild($cleaned->importNode($child, true));
+        }
+        $output = $cleaned->saveHTML();
+
+        return $output;
     }
 
     protected function isSpecialCase($attr_name): bool
