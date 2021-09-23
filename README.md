@@ -23,12 +23,6 @@ $options = [
 ];
 ```
 
-for example:
-
-```php
-
-```
-
 ## Usage
 
 ### Sanitizing HTML
