@@ -97,9 +97,8 @@ class DOMSanitizer
         foreach($body->childNodes as $child) {
             $cleaned->appendChild($cleaned->importNode($child, true));
         }
-        $output = $cleaned->saveHTML();
 
-        return $output;
+        return $cleaned->saveHTML();
     }
 
     protected function isSpecialCase($attr_name): bool
