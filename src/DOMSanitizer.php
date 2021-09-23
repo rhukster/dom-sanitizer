@@ -28,6 +28,12 @@ class DOMSanitizer
     protected $disallowed_tags = [];
     protected $disallowed_attributes = [];
 
+    protected $options = [
+        'remove_namespaces' => false, 
+        'remove_php_tags' => true,
+        'remove_wrapper_tags' => true,
+    ];
+
     public function __construct(int $type = self::HTML)
     {
         switch ($type) {
@@ -48,14 +54,15 @@ class DOMSanitizer
         }
     }
 
-    public function sanitize(string $dom_content, bool $remove_namespaces = false, $remove_php = true): string
+    public function sanitize(string $dom_content, array $options = []): string
     {
+        $options = array_merge($this->options, $options);
 
-        if ($remove_namespaces) {
+        if ($options['remove_namespaces']) {
             $dom_content = preg_replace('/xmlns[^=]*="[^"]*"/i', '', $dom_content);
         }
 
-        if ($remove_php) {
+        if ($options['remove_php_tags']) {
             $dom_content = preg_replace('/<\?(=|php)(.+?)\?>/i', '', $dom_content);
         }
 
@@ -93,12 +100,13 @@ class DOMSanitizer
             }
         }
 
-        $body = $document->getElementsByTagName('body')->item(0);
-        foreach($body->childNodes as $child) {
-            $cleaned->appendChild($cleaned->importNode($child, true));
+        if ($options['remove_wrapper_tags']) {
+            $output = preg_replace('~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i', '', $document->saveHTML());
+        } else {
+            $output = $document->saveHTML();
         }
 
-        return $cleaned->saveHTML();
+        return $output;
     }
 
     protected function isSpecialCase($attr_name): bool
