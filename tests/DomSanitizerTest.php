@@ -85,6 +85,14 @@ final class DomSanitizerTest extends TestCase
         );
     }
 
+    public function testInvalidSVG(): void
+    {
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+        $this->assertEquals(
+            false,
+            $sanitizer->sanitize('<foo></foo>')
+        );
+    }
 
     public function testCustomAttributes(): void
     {
