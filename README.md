@@ -1,6 +1,6 @@
 # DOMSanitizer
 
-A simple but effective DOM/SVG/MathML Sanitizer for PHP 7.4+.  This was created due to my requirements for a performant DOM and specifically SVG sanitizer that was MIT compatible.  
+A simple but effective DOM/SVG/MathML Sanitizer for PHP 7.3+.  This was created due to my requirements for a performant DOM and specifically SVG sanitizer that was MIT compatible.  
 
 This borrows the extensive list of valid tags and attributes in the excellent [DOMPurify](https://github.com/cure53/DOMPurify) library for JavaScript, but uses PHP DOMDocument to parse the DOM and filter out dangerous tags and attributes.
 
