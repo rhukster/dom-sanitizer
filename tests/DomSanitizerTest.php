@@ -19,7 +19,6 @@ final class DomSanitizerTest extends TestCase
     {
         $bad_html = file_get_contents('./tests/bad_full.html');
         $good_html = file_get_contents('./tests/good_full.html');
-
         $sanitizer = new DOMSanitizer(DOMSanitizer::HTML);
 
         $cleaned = $sanitizer->sanitize($bad_html, [
@@ -125,6 +124,4 @@ final class DomSanitizerTest extends TestCase
             preg_replace($from, $to, $actual)
         );
     }
-
-
 }

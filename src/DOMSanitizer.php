@@ -1,4 +1,12 @@
 <?php
+
+/**
+ * @package    Rhukster\DomSanitizer
+ *
+ * @copyright  Copyright (c) Andy Miller. All rights reserved.
+ * @license    MIT License; see LICENSE file for details.
+ */
+
 namespace Rhukster\DomSanitizer;
 
 class DOMSanitizer
@@ -38,6 +46,11 @@ class DOMSanitizer
         'compress-output' => true,
     ];
 
+    /**
+     * Constructor that takes an optional DOM type
+     *
+     * @param int $type The type of DOM you will be sanitizing HTML/SVG/MathML
+     */
     public function __construct(int $type = self::HTML)
     {
         switch ($type) {
@@ -58,6 +71,13 @@ class DOMSanitizer
         }
     }
 
+    /**
+     * Sanitize an HTML-style DOM string
+     *
+     * @param string $dom_content
+     * @param array $options
+     * @return string
+     */
     public function sanitize(string $dom_content, array $options = []): string
     {
         $options = array_merge($this->options, $options);
@@ -115,27 +135,49 @@ class DOMSanitizer
         return $output;
     }
 
+    /**
+     * Add new additional supported tags
+     *
+     * @param array $allowed_tags
+     */
     public function addAllowedTags(array $allowed_tags): void
     {
         $this->allowed_tags = array_unique(array_merge(array_map('strtolower', $allowed_tags), $this->allowed_tags));
     }
 
+    /**
+     * Add new additional supported attributes
+     *
+     * @param array $allowed_attributes
+     */
     public function addAllowedAttributes(array $allowed_attributes): void
     {
         $this->allowed_attributes = array_unique(array_merge(array_map('strtolower', $allowed_attributes), $this->allowed_attributes));
     }
 
+    /**
+     * Add new additional unsupported tags
+     *
+     * @param array $disallowed_tags
+     */
     public function addDisallowedTags(array $disallowed_tags): void
     {
         $this->disallowed_tags = array_unique(array_merge(array_map('strtolower', $disallowed_tags), $this->disallowed_tags));
     }
 
+    /**
+     * Add new additional unsupported attributes
+     *
+     * @param array $disallowed_attributes
+     */
     public function addDisallowedAttributes(array $disallowed_attributes): void
     {
         $this->disallowed_attributes = array_unique(array_merge(array_map('strtolower', $disallowed_attributes), $this->disallowed_attributes));
     }
 
     /**
+     * Get all the current allowed tags
+     *
      * @return array|string[]
      */
     public function getAllowedTags(): array
@@ -144,6 +186,8 @@ class DOMSanitizer
     }
 
     /**
+     * Sets the current allowed tags
+     *
      * @param array|string[] $allowed_tags
      */
     public function setAllowedTags(array $allowed_tags): void
@@ -152,6 +196,8 @@ class DOMSanitizer
     }
 
     /**
+     * Get all the current allowed attributes
+     *
      * @return array|string[]
      */
     public function getAllowedAttributes(): array
@@ -160,6 +206,8 @@ class DOMSanitizer
     }
 
     /**
+     * Sets the current allowed attributes
+     *
      * @param array|string[] $allowed_attributes
      */
     public function setAllowedAttributes(array $allowed_attributes): void
@@ -168,6 +216,8 @@ class DOMSanitizer
     }
 
     /**
+     * Gets all the current disallowed tags
+     *
      * @return array|string[]
      */
     public function getDisallowedTags(): array
@@ -176,6 +226,8 @@ class DOMSanitizer
     }
 
     /**
+     * Sets the current disallowed tags
+     *
      * @param array|string[] $disallowed_tags
      */
     public function setDisallowedTags(array $disallowed_tags): void
@@ -184,6 +236,8 @@ class DOMSanitizer
     }
 
     /**
+     * Gets all the current disallowed attributes
+     *
      * @return array|string[]
      */
     public function getDisallowedAttributes(): array
@@ -192,6 +246,8 @@ class DOMSanitizer
     }
 
     /**
+     * Sets the current disallowed attributes
+     *
      * @param array|string[] $disallowed_attributes
      */
     public function setDisallowedAttributes($disallowed_attributes): void
@@ -199,26 +255,60 @@ class DOMSanitizer
         $this->disallowed_attributes = $disallowed_attributes;
     }
 
+    /**
+     * Determines if the attribute is a special case, e.g. (data-, aria-)
+     *
+     * @param $attr_name
+     * @return bool
+     */
     protected function isSpecialCase($attr_name): bool
     {
         return $this->startsWith($attr_name, self::$special_cases);
     }
 
+    /**
+     * Determines if the attribute value is an external link
+     *
+     * @param $attr_value
+     * @return bool
+     */
     protected function isExternalUrl($attr_value): bool
     {
         return preg_match(self::EXTERNAL_URL, $attr_value);
     }
 
+    /**
+     * Determines if the attribute and value contains a javascript reference
+     *
+     * @param $attr_name
+     * @param $attr_value
+     * @return bool
+     */
     protected function isJavascriptAttribute($attr_name, $attr_value): bool
     {
         return in_array($attr_name, ['href','xlink:href']) && preg_match(self::JAVASCRIPT_ATTR, $attr_value);
     }
 
+    /**
+     * Determines if the attribute and value is trying to use onload
+     *
+     * @param $attr_name
+     * @param $attr_value
+     * @return bool
+     */
     protected function isSneakyOnload($attr_name, $attr_value): bool
     {
         return in_array($attr_name, ['href','xlink:href']) && preg_match(self::SNEAKY_ONLOAD, $attr_value);
     }
 
+    /**
+     * Helper method to provide str_starts_with functionality that can take an array of needles
+     *
+     * @param string $haystack
+     * @param $needle
+     * @param bool $case_sensitive
+     * @return bool
+     */
     protected function startsWith(string $haystack, $needle, bool $case_sensitive = true): bool
     {
         $status = false;
