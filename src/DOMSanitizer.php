@@ -16,9 +16,12 @@ class DOMSanitizer
     const MATHML = 3;
 
     const EXTERNAL_URL = "/url\(\s*('|\")\s*(ftp:\/\/|http:\/\/|https:\/\/|\/\/)/i";
-    const JAVASCRIPT_ATTR = "/javascript\:/i";
-    const SNEAKY_ONLOAD = "/data:.*onload=/i";
-    const WRAPPER_TAGS = "~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i";
+    const JAVASCRIPT_ATTR = "/(\s(?:href|xlink\:href)\s*=\s*\"javascript:.*\")/i";
+    const SNEAKY_ONLOAD = "/(\s(?:href|xlink\:href)\s*=\s*\"data:.*onload.*\")/i";
+    const NAMESPACE_TAGS = '/xmlns[^=]*="[^"]*"/i';
+    const HTML_TAGS = "~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i";
+    const PHP_TAGS = '/<\?(=|php)(.+?)\?>/i';
+    const XML_TAGS = '/<\?xml.*\?>/i';
     const WHITESPACE_FROM = ['/\>[^\S ]+/s', '/[^\S ]+\</s', '/(\s)+/s', '/> </s'];
     const WHITESPACE_TO =  ['>', '<', '\\1', '><'];
 
@@ -34,6 +37,8 @@ class DOMSanitizer
     private static $math_ml_attr = ['accent', 'accentunder', 'align', 'bevelled', 'close', 'columnsalign', 'columnlines', 'columnspan', 'denomalign', 'depth', 'dir', 'display', 'displaystyle', 'encoding', 'fence', 'frame', 'height', 'href', 'id', 'largeop', 'length', 'linethickness', 'lspace', 'lquote', 'mathbackground', 'mathcolor', 'mathsize', 'mathvariant', 'maxsize', 'minsize', 'movablelimits', 'notation', 'numalign', 'open', 'rowalign', 'rowlines', 'rowspacing', 'rowspan', 'rspace', 'rquote', 'scriptlevel', 'scriptminsize', 'scriptsizemultiplier', 'selection', 'separator', 'separators', 'stretchy', 'subscriptshift', 'supscriptshift', 'symmetric', 'voffset', 'width', 'xmlns'];
     private static $special_cases = ['data-', 'aria-'];
 
+    protected $document_type;
+
     protected $allowed_tags = [];
     protected $allowed_attributes = [];
     protected $disallowed_tags = [];
@@ -42,7 +47,8 @@ class DOMSanitizer
     protected $options = [
         'remove-namespaces' => false,
         'remove-php-tags' => true,
-        'remove-wrapper-tags' => true,
+        'remove-html-tags' => true,
+        'remove-xml-tags' => true,
         'compress-output' => true,
     ];
 
@@ -53,6 +59,8 @@ class DOMSanitizer
      */
     public function __construct(int $type = self::HTML)
     {
+        $this->document_type = $type;
+
         switch ($type) {
             case self::SVG:
                 $this->allowed_tags = array_unique(array_merge(self::$root, self::$svg, self::$svg_filters));
@@ -83,18 +91,17 @@ class DOMSanitizer
         $options = array_merge($this->options, $options);
 
         if ($options['remove-namespaces']) {
-            $dom_content = preg_replace('/xmlns[^=]*="[^"]*"/i', '', $dom_content);
+            $dom_content = preg_replace(self::NAMESPACE_TAGS, '', $dom_content);
         }
 
         if ($options['remove-php-tags']) {
-            $dom_content = preg_replace('/<\?(=|php)(.+?)\?>/i', '', $dom_content);
+            $dom_content = preg_replace(self::PHP_TAGS, '', $dom_content);
         }
 
         libxml_use_internal_errors(true);
         libxml_clear_errors();
 
-        $document = new \DOMDocument();
-        $document->loadHTML($dom_content);
+        $document = $this->loadDocument($dom_content);
         $document->preserveWhiteSpace = false;
         $document->strictErrorChecking = false;
         $document->formatOutput = true;
@@ -111,9 +118,7 @@ class DOMSanitizer
                     $attr_name = $element->attributes->item($j)->name;
                     $attr_value = $element->attributes->item($j)->textContent;
                     if((!in_array(strtolower($attr_name), $attributes) && !$this->isSpecialCase($attr_name)) ||
-                        $this->isExternalUrl($attr_value) ||
-                        $this->isJavascriptAttribute($attr_name, $attr_value) ||
-                        $this->isSneakyOnload($attr_name, $attr_value)) {
+                        $this->isExternalUrl($attr_value)) {
                         $element->removeAttribute($attr_name);
                     }
                 }
@@ -122,17 +127,27 @@ class DOMSanitizer
             }
         }
 
-        if ($options['remove-wrapper-tags']) {
-            $output = preg_replace(self::WRAPPER_TAGS, '', $document->saveHTML());
-        } else {
-            $output = $document->saveHTML();
+        $output = $this->saveDocument($document);
+
+        $output = $this->regexCleaning($output);
+
+        if ($options['remove-html-tags']) {
+            $output = preg_replace(self::HTML_TAGS, '', $output);
         }
+
+        if ($options['remove-xml-tags']) {
+            $output = preg_replace(self::XML_TAGS, '', $output);
+        }
+
+        if ($options['compress-output']) {
+                    $output = preg_replace(self::WHITESPACE_FROM, self::WHITESPACE_TO, $output);
+                }
 
         if ($options['compress-output']) {
             $output = preg_replace(self::WHITESPACE_FROM, self::WHITESPACE_TO, $output);
         }
 
-        return $output;
+        return trim($output);
     }
 
     /**
@@ -278,27 +293,58 @@ class DOMSanitizer
     }
 
     /**
-     * Determines if the attribute and value contains a javascript reference
+     * Does various regex cleanup
      *
-     * @param $attr_name
-     * @param $attr_value
-     * @return bool
+     * @param $output
+     * @return string
      */
-    protected function isJavascriptAttribute($attr_name, $attr_value): bool
+    protected function regexCleaning(string $output): string
     {
-        return in_array($attr_name, ['href','xlink:href']) && preg_match(self::JAVASCRIPT_ATTR, $attr_value);
+        $output = preg_replace(self::JAVASCRIPT_ATTR, '', $output);
+        $output = preg_replace(self::SNEAKY_ONLOAD, '', $output);
+        return $output;
     }
 
     /**
-     * Determines if the attribute and value is trying to use onload
+     * Loads appropriate DOMDocument object
      *
-     * @param $attr_name
-     * @param $attr_value
-     * @return bool
+     * @param string $content
+     * @return \DOMDocument
      */
-    protected function isSneakyOnload($attr_name, $attr_value): bool
+    protected function loadDocument(string $content): \DOMDocument
     {
-        return in_array($attr_name, ['href','xlink:href']) && preg_match(self::SNEAKY_ONLOAD, $attr_value);
+        $document = new \DOMDocument();
+        switch ($this->document_type) {
+            case self::SVG:
+            case self::MATHML:
+                $document->loadXML($content);
+                break;
+            default:
+                $document->loadHTML($content);
+        }
+
+        return $document;
+    }
+
+    /**
+     * Saves appropriate DOMDocument object
+     *
+     * @param \DOMDocument $document
+     * @return false|string
+     */
+    protected function saveDocument(\DOMDocument $document)
+    {
+
+        switch ($this->document_type) {
+            case self::SVG:
+            case self::MATHML:
+                $content = $document->saveXML($document);
+                break;
+            default:
+                $content = $document->saveHTML($document);
+        }
+
+        return $content;
     }
 
     /**
