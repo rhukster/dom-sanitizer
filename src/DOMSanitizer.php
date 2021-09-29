@@ -98,9 +98,6 @@ class DOMSanitizer
             $dom_content = preg_replace(self::PHP_TAGS, '', $dom_content);
         }
 
-        libxml_use_internal_errors(true);
-        libxml_clear_errors();
-
         $document = $this->loadDocument($dom_content);
         $document->preserveWhiteSpace = false;
         $document->strictErrorChecking = false;
@@ -314,14 +311,19 @@ class DOMSanitizer
     protected function loadDocument(string $content): \DOMDocument
     {
         $document = new \DOMDocument();
+
+        $internalErrors = libxml_use_internal_errors(true);
+        libxml_clear_errors();
+
         switch ($this->document_type) {
             case self::SVG:
             case self::MATHML:
-                $document->loadXML($content);
+                @$document->loadXML($content);
                 break;
             default:
-                $document->loadHTML($content);
+                @$document->loadHTML($content);
         }
+        libxml_use_internal_errors($internalErrors);
 
         return $document;
     }
