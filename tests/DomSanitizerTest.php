@@ -22,7 +22,7 @@ final class DomSanitizerTest extends TestCase
         $sanitizer = new DOMSanitizer(DOMSanitizer::HTML);
 
         $cleaned = $sanitizer->sanitize($bad_html, [
-            'remove-wrapper-tags' => false,
+            'remove-html-tags' => false,
         ]);
 
         $this->assertEqualHtml(
@@ -50,9 +50,13 @@ final class DomSanitizerTest extends TestCase
         $good_svg = file_get_contents('./tests/good.svg');
         $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
 
+        $output = $sanitizer->sanitize($bad_svg,  [
+            'compress-output' => false
+        ]);
+
         $this->assertEqualHtml(
             $good_svg,
-            $sanitizer->sanitize($bad_svg)
+            $output
         );
     }
 
@@ -120,6 +124,18 @@ final class DomSanitizerTest extends TestCase
         $this->assertEqualHTML(
             $expected3,
             $sanitizer->sanitize($input)
+        );
+    }
+
+    public function testCaseSensitivity(): void{
+        $bad_svg = file_get_contents('./tests/cartman.svg');
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+
+        $this->assertStringContainsString(
+            'viewBox',
+            $sanitizer->sanitize($bad_svg, [
+                'compress-output' => false
+            ])
         );
     }
 
