@@ -18,7 +18,8 @@ Options can be passed to the `sanitize()` method as an optional array.  Default 
 $options = [
     'remove-namespaces' => false,
     'remove-php-tags' => true,
-    'remove-wrapper-tags' => true,
+    'remove-html-tags' => true,
+    'remove-xml-tags' => true,
     'compress-output' => true,
 ];
 ```
@@ -34,9 +35,11 @@ require 'vendor/autoload.php';
 
 use Rhukster\DomSanitizer\DOMSanitizer;
 
+$input = file_get_contents('bad.html');
+
 $sanitizer = new DOMSanitizer(DOMSanitizer::HTML);
-$cleaned = $sanitizer->sanitize($bad_html, [
-    'remove-wrapper-tags' => false,
+$output = $sanitizer->sanitize($input, [
+    'remove-html-tags' => false,
 ]);
 ```
 
@@ -49,9 +52,25 @@ require 'vendor/autoload.php';
 
 use Rhukster\DomSanitizer\DOMSanitizer;
 
-$bad_svg = file_get_contents('bad.svg');
+$input = file_get_contents('bad.svg');
 $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
-$good_svg = $sanitizer->sanitize($bad_svg);
+$output = $sanitizer->sanitize($input);
+```
+
+### Sanitizing MathML
+
+You can limit the valid tags and attributes by passing `DOMSanitizer::MATHML` to the constructor.  This is advisable if you know you are dealing with MathML code.
+
+```php
+require 'vendor/autoload.php';
+
+use Rhukster\DomSanitizer\DOMSanitizer;
+
+$input = file_get_contents('mathml-sample.xml');
+$sanitizer = new DOMSanitizer(DOMSanitizer::MATHML);
+$output = $sanitizer->sanitize($input, [
+    'compress-output' => false,
+]);
 ```
 
 ### Modifying the allowed tags and attributes

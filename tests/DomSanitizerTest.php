@@ -60,6 +60,16 @@ final class DomSanitizerTest extends TestCase
         );
     }
 
+    public function testGoodMathML(): void{
+        $input = $expected = file_get_contents('./tests/mathml-sample.xml');
+        $sanitizer = new DOMSanitizer(DOMSanitizer::MATHML);
+
+        $this->assertEqualHTML(
+            $expected,
+            $sanitizer->sanitize($input)
+        );
+    }
+
     public function testCustomTags(): void
     {
         $sanitizer = new DOMSanitizer();
