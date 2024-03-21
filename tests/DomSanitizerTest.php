@@ -164,6 +164,22 @@ final class DomSanitizerTest extends TestCase
         );
     }
 
+    public function testXlinkHRef(): void {
+        $bad_svg = file_get_contents(__DIR__ . '/xlink.svg');
+        $good_svg = file_get_contents(__DIR__ . '/xlink_expected.svg');
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+        $sanitizer->addDisallowedAttributes(['xlink:href']);
+
+        $output = $sanitizer->sanitize($bad_svg,  [
+            'compress-output' => false
+        ]);
+
+        $this->assertEqualHtml(
+            $good_svg,
+            $output
+        );
+    }
+
     protected function assertEqualHtml($expected, $actual)
     {
         $from = ['/\>[^\S ]+/s', '/[^\S ]+\</s', '/(\s)+/s', '/> </s'];

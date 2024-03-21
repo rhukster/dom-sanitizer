@@ -115,9 +115,15 @@ class DOMSanitizer
                 for($j = $element->attributes->length; --$j >= 0;) {
                     $attr_name = $element->attributes->item($j)->name;
                     $attr_value = $element->attributes->item($j)->textContent;
-                    if((!in_array(strtolower($attr_name), $attributes) && !$this->isSpecialCase($attr_name)) ||
+                    $attr_prefix = $element->attributes->item($j)->prefix;
+                    $attr_name_prefix = $attr_name;
+                    if ($attr_prefix !== '') {
+                        $attr_name_prefix = "$attr_prefix:$attr_name";
+                    }
+                    if ((!in_array(strtolower($attr_name_prefix), $attributes) && !$this->isSpecialCase($attr_name)) ||
                         $this->isExternalUrl($attr_value)) {
-                        $element->removeAttribute($attr_name);
+                        $attr_ns = $element->attributes->item($j)->namespaceURI;
+                        $element->removeAttributeNS($attr_ns, $attr_name);
                     }
                 }
             } else {
