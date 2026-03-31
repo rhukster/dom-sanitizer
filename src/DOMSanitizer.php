@@ -121,7 +121,8 @@ class DOMSanitizer
                         $attr_name_prefix = "$attr_prefix:$attr_name";
                     }
                     if ((!in_array(strtolower($attr_name_prefix), $attributes) && !$this->isSpecialCase($attr_name)) ||
-                        $this->isExternalUrl($attr_value)) {
+                        $this->isExternalUrl($attr_value) ||
+                        $this->isDangerousUrl($attr_name_prefix, $attr_value)) {
                         $attr_ns = $element->attributes->item($j)->namespaceURI;
                         $element->removeAttributeNS($attr_ns, $attr_name);
                     }
@@ -294,6 +295,36 @@ class DOMSanitizer
     protected function isExternalUrl($attr_value): bool
     {
         return preg_match(self::EXTERNAL_URL, $attr_value);
+    }
+
+    /**
+     * Determines if an href/xlink:href attribute contains a dangerous URL scheme
+     * (javascript:, data: with script content). Normalizes control characters
+     * before checking to prevent entity-encoding bypasses (CVE-2026-33172 bypass).
+     *
+     * @param string $attr_name
+     * @param string $attr_value
+     * @return bool
+     */
+    protected function isDangerousUrl(string $attr_name, string $attr_value): bool
+    {
+        if (!in_array(strtolower($attr_name), ['href', 'xlink:href'])) {
+            return false;
+        }
+
+        // Strip all ASCII control characters and whitespace (0x00-0x20) to prevent
+        // bypasses via tab, newline, CR, null bytes, or other control chars
+        $normalized = preg_replace('/[\x00-\x20]+/', '', $attr_value);
+
+        if (preg_match('/^javascript:/i', $normalized)) {
+            return true;
+        }
+
+        if (preg_match('/^data:.*onload/i', $normalized)) {
+            return true;
+        }
+
+        return false;
     }
 
     /**

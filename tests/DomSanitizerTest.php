@@ -345,6 +345,67 @@ final class DomSanitizerTest extends TestCase
         }
     }
 
+    // =========================================================================
+    // Issue #6: SVG Sanitizer Bypass via ASCII Whitespace Entities
+    // (CVE-2026-33172 fix bypass)
+    // =========================================================================
+
+    /**
+     * @dataProvider providerWhitespaceEntityBypass
+     */
+    public function testWhitespaceEntityBypassBlocked(string $input, string $description): void
+    {
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+        $output = $sanitizer->sanitize($input);
+
+        $this->assertStringNotContainsString(
+            'javascript',
+            strtolower(preg_replace('/[\x00-\x20]+/', '', $output)),
+            "Failed: $description"
+        );
+    }
+
+    public static function providerWhitespaceEntityBypass(): array
+    {
+        return [
+            // Tab bypass
+            [
+                '<svg xmlns="http://www.w3.org/2000/svg"><a href="java&#x09;script:alert(1)"><text>Click</text></a></svg>',
+                'href with tab entity (&#x09;) in javascript: should be stripped'
+            ],
+            // Newline bypass
+            [
+                '<svg xmlns="http://www.w3.org/2000/svg"><a href="java&#x0a;script:alert(2)"><text>Click</text></a></svg>',
+                'href with newline entity (&#x0a;) in javascript: should be stripped'
+            ],
+            // Carriage return bypass
+            [
+                '<svg xmlns="http://www.w3.org/2000/svg"><a href="java&#x0d;script:alert(3)"><text>Click</text></a></svg>',
+                'href with CR entity (&#x0d;) in javascript: should be stripped'
+            ],
+            // Leading tab bypass
+            [
+                '<svg xmlns="http://www.w3.org/2000/svg"><a href="&#x09;javascript:alert(4)"><text>Click</text></a></svg>',
+                'href with leading tab entity before javascript: should be stripped'
+            ],
+            // xlink:href bypass
+            [
+                '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><a xlink:href="java&#x09;script:alert(5)"><text>Click</text></a></svg>',
+                'xlink:href with tab entity in javascript: should be stripped'
+            ],
+            // Multiple whitespace characters
+            [
+                '<svg xmlns="http://www.w3.org/2000/svg"><a href="j&#x09;a&#x0a;v&#x0d;ascript:alert(6)"><text>Click</text></a></svg>',
+                'href with multiple whitespace entities scattered in javascript: should be stripped'
+            ],
+            // Null byte bypass attempt
+            [
+                '<svg xmlns="http://www.w3.org/2000/svg"><a href="java&#x00;script:alert(7)"><text>Click</text></a></svg>',
+                'href with null byte entity in javascript: should be stripped'
+            ],
+        ];
+    }
+
     protected function assertEqualHtml($expected, $actual, $message = '')
     {
         $from = ['/\>[^\S ]+/s', '/[^\S ]+\</s', '/(\s)+/s', '/> </s'];
