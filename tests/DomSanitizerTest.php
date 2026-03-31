@@ -346,6 +346,55 @@ final class DomSanitizerTest extends TestCase
     }
 
     // =========================================================================
+    // Issue #5: SVG filter elements incorrectly removed due to camelCase
+    // =========================================================================
+
+    public function testSvgFiltersPreserved(): void
+    {
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+
+        $input = '<svg xmlns="http://www.w3.org/2000/svg"><defs><filter id="blur"><feGaussianBlur stdDeviation="5"/></filter></defs><rect filter="url(#blur)" x="0" y="0" width="100" height="100"/></svg>';
+        $output = $sanitizer->sanitize($input, ['compress-output' => false]);
+
+        $this->assertStringContainsString(
+            'feGaussianBlur',
+            $output,
+            'SVG filter elements like feGaussianBlur should be preserved'
+        );
+    }
+
+    /**
+     * @dataProvider providerSvgFilterTags
+     */
+    public function testSvgFilterTagsAllowed(string $tag, string $description): void
+    {
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+
+        $input = "<svg xmlns=\"http://www.w3.org/2000/svg\"><defs><filter id=\"f\"><{$tag}/></filter></defs></svg>";
+        $output = $sanitizer->sanitize($input, ['compress-output' => false]);
+
+        $this->assertStringContainsString(
+            $tag,
+            $output,
+            "SVG filter tag '{$tag}' should be allowed: $description"
+        );
+    }
+
+    public static function providerSvgFilterTags(): array
+    {
+        return [
+            ['feGaussianBlur', 'Gaussian blur filter'],
+            ['feBlend', 'Blend filter'],
+            ['feColorMatrix', 'Color matrix filter'],
+            ['feOffset', 'Offset filter'],
+            ['feMerge', 'Merge filter'],
+            ['feMergeNode', 'Merge node filter'],
+            ['feFlood', 'Flood filter'],
+            ['feComposite', 'Composite filter'],
+        ];
+    }
+
+    // =========================================================================
     // Issue #6: SVG Sanitizer Bypass via ASCII Whitespace Entities
     // (CVE-2026-33172 fix bypass)
     // =========================================================================
