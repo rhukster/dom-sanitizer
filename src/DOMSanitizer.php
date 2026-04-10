@@ -111,7 +111,12 @@ class DOMSanitizer
         for($i = $elements->length; --$i >= 0;) {
             $element = $elements->item($i);
             $tag_name = $element->tagName;
-            if(in_array(strtolower($tag_name), $tags)) {
+            $tag_name_lower = strtolower($tag_name);
+            if(in_array($tag_name_lower, $tags)) {
+                if ($tag_name_lower === 'style' && $this->hasDangerousStyleContent($element->textContent)) {
+                    $element->parentNode->removeChild($element);
+                    continue;
+                }
                 for($j = $element->attributes->length; --$j >= 0;) {
                     $attr_name = $element->attributes->item($j)->name;
                     $attr_value = $element->attributes->item($j)->textContent;
@@ -324,6 +329,44 @@ class DOMSanitizer
             return true;
         }
 
+        return false;
+    }
+
+    /**
+     * Determines if a <style> element's text content contains CSS that would
+     * cause the browser to fetch external resources: @import rules, url()
+     * references to external schemes (http, https, ftp, protocol-relative,
+     * data:), or legacy IE expression(). CSS hex escapes (\hh ) are decoded
+     * first so escape-based bypasses are caught (GHSA-93vf-569f-22cq).
+     * Fragment references like url(#gradient) are preserved.
+     *
+     * @param string $css
+     * @return bool
+     */
+    protected function hasDangerousStyleContent(string $css): bool
+    {
+        $normalized = preg_replace_callback(
+            '/\\\\([0-9a-fA-F]{1,6})[ \t\n\r\f]?/',
+            function ($m) {
+                $code = hexdec($m[1]);
+                if ($code <= 0 || $code > 0x10FFFF) {
+                    return '';
+                }
+                return mb_chr($code, 'UTF-8') ?: '';
+            },
+            $css
+        );
+        $normalized = preg_replace('/\\\\([^0-9a-fA-F\r\n\f])/', '$1', $normalized);
+
+        if (preg_match('/@import\b/i', $normalized)) {
+            return true;
+        }
+        if (preg_match('/url\s*\(\s*["\']?\s*(?:https?:|ftp:|\/\/|data:)/i', $normalized)) {
+            return true;
+        }
+        if (preg_match('/expression\s*\(/i', $normalized)) {
+            return true;
+        }
         return false;
     }
 
