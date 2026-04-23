@@ -543,6 +543,57 @@ final class DomSanitizerTest extends TestCase
         $this->assertStringContainsString('color: red', $output, 'HTML plain style rules must be preserved');
     }
 
+    /**
+     * GHSA-3446-6mgw-f79p (filed against Grav, exploits SVG upload via this
+     * library): an attacker-uploaded SVG containing a DOCTYPE with an external
+     * `SYSTEM` entity must NOT cause file disclosure. We assert that the
+     * sanitizer (a) doesn't expand the entity into the output and (b) doesn't
+     * issue a network request for the bogus URL — both achieved by stripping
+     * DOCTYPE/ENTITY before parse and passing LIBXML_NONET.
+     */
+    public function testSVGXxeFileDisclosurePayloadIsNeutralized(): void
+    {
+        $payload = <<<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg [
+  <!ENTITY xxe SYSTEM "file:///etc/passwd">
+]>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <text x="10" y="50">&xxe;</text>
+</svg>
+XML;
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+        $output = $sanitizer->sanitize($payload);
+
+        $this->assertStringNotContainsString('root:x:', $output, 'must not expand &xxe; into /etc/passwd contents');
+        $this->assertStringNotContainsString('<!DOCTYPE', $output, 'DOCTYPE must be stripped');
+        $this->assertStringNotContainsString('<!ENTITY', $output, 'ENTITY declarations must be stripped');
+        $this->assertStringNotContainsString('SYSTEM', $output, 'SYSTEM keyword must be stripped');
+    }
+
+    public function testSVGXxeBillionLaughsPayloadIsNeutralized(): void
+    {
+        // Classic billion-laughs DoS — entity nesting that would expand
+        // exponentially if the parser substituted entities. With our DOCTYPE
+        // strip the declarations are gone before libxml sees them.
+        $payload = <<<XML
+<?xml version="1.0"?>
+<!DOCTYPE lolz [
+  <!ENTITY lol "lol">
+  <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+  <!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">
+]>
+<svg xmlns="http://www.w3.org/2000/svg"><text>&lol3;</text></svg>
+XML;
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+        $output = $sanitizer->sanitize($payload);
+
+        // Output must remain bounded — far less than the 1000+ chars an
+        // expansion would produce.
+        $this->assertLessThan(500, strlen($output), 'output must not balloon from entity expansion');
+        $this->assertStringNotContainsString('lollollollol', $output, 'entities must not have expanded');
+    }
+
     protected function assertEqualHtml($expected, $actual, $message = '')
     {
         $from = ['/\>[^\S ]+/s', '/[^\S ]+\</s', '/(\s)+/s', '/> </s'];

@@ -387,27 +387,69 @@ class DOMSanitizer
     /**
      * Loads appropriate DOMDocument object
      *
+     * Hardens the loader against XML External Entity (XXE) and
+     * billion-laughs attacks by:
+     *   - stripping `<!DOCTYPE …>` and any `<!ENTITY …>` declarations from
+     *     the input *before* parsing (sanitized SVG/HTML never legitimately
+     *     needs a doctype or entity declarations);
+     *   - passing `LIBXML_NONET` so the parser cannot make outbound HTTP /
+     *     filesystem requests for external entities or DTDs;
+     *   - on PHP < 8 (where the default did load external entities),
+     *     calling `libxml_disable_entity_loader(true)` for the duration of
+     *     the parse. The function is deprecated but still a no-op on PHP 8+.
+     *
      * @param string $content
      * @return \DOMDocument
      */
     protected function loadDocument(string $content): \DOMDocument
     {
+        $content = self::stripDoctypeAndEntities($content);
+
         $document = new \DOMDocument();
 
         $internalErrors = libxml_use_internal_errors(true);
         libxml_clear_errors();
 
-        switch ($this->document_type) {
-            case self::SVG:
-            case self::MATHML:
-                @$document->loadXML($content);
-                break;
-            default:
-                @$document->loadHTML($content);
+        $previousEntityLoader = null;
+        if (\PHP_VERSION_ID < 80000 && function_exists('libxml_disable_entity_loader')) {
+            $previousEntityLoader = libxml_disable_entity_loader(true);
         }
-        libxml_use_internal_errors($internalErrors);
+
+        $libxmlOptions = LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING;
+
+        try {
+            switch ($this->document_type) {
+                case self::SVG:
+                case self::MATHML:
+                    @$document->loadXML($content, $libxmlOptions);
+                    break;
+                default:
+                    @$document->loadHTML($content, $libxmlOptions);
+            }
+        } finally {
+            if ($previousEntityLoader !== null) {
+                libxml_disable_entity_loader($previousEntityLoader);
+            }
+            libxml_use_internal_errors($internalErrors);
+        }
 
         return $document;
+    }
+
+    /**
+     * Strip DOCTYPE and ENTITY declarations from a sanitizer input.
+     *
+     * Sanitized content (SVG/HTML/MathML uploaded by users) has no legitimate
+     * use for either, so we excise them before parsing — even with
+     * `LIBXML_NONET` and the entity loader disabled, eliminating the
+     * declarations entirely is the cleanest defense against future libxml
+     * regressions.
+     */
+    private static function stripDoctypeAndEntities(string $content): string
+    {
+        $content = preg_replace('/<!DOCTYPE\b[^>]*(?:\[[^\]]*\])?[^>]*>/is', '', $content) ?? $content;
+        $content = preg_replace('/<!ENTITY\b[^>]*>/i', '', $content) ?? $content;
+        return $content;
     }
 
     /**
