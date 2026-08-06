@@ -15,7 +15,10 @@ class DOMSanitizer
     const SVG = 2;
     const MATHML = 3;
 
-    const EXTERNAL_URL = "/url\(\s*('|\")\s*(ftp:\/\/|http:\/\/|https:\/\/|\/\/)/i";
+    // Quotes inside url() are optional per CSS Values 4 §4.4, and `data:` is
+    // as much a resource load as http:. Requiring a quote here let
+    // `url(//evil.example/x)` through on every attribute. (GHSA-jfrr-ch68-f2w9)
+    const EXTERNAL_URL = "/url\s*\(\s*[\"']?\s*(ftp:\/\/|http:\/\/|https:\/\/|\/\/|data:)/i";
     const JAVASCRIPT_ATTR = "/(\s(?:href|xlink\:href)\s*=\s*\"javascript:.*?\")/i";
     const SNEAKY_ONLOAD = "/(\s(?:href|xlink\:href)\s*=\s*\"data:.*onload.*?\")/i";
     const NAMESPACE_TAGS = '/xmlns[^=]*="[^"]*"/i';
@@ -127,6 +130,7 @@ class DOMSanitizer
                     }
                     if ((!in_array(strtolower($attr_name_prefix), $attributes) && !$this->isSpecialCase($attr_name)) ||
                         $this->isExternalUrl($attr_value) ||
+                        $this->isDangerousStyleAttribute($attr_name, $attr_value) ||
                         $this->isDangerousUrl($attr_name_prefix, $attr_value)) {
                         $attr_ns = $element->attributes->item($j)->namespaceURI;
                         $element->removeAttributeNS($attr_ns, $attr_name);
@@ -300,6 +304,32 @@ class DOMSanitizer
     protected function isExternalUrl($attr_value): bool
     {
         return preg_match(self::EXTERNAL_URL, $attr_value);
+    }
+
+    /**
+     * Determines if an inline `style` attribute carries CSS that would load an
+     * external resource or execute.
+     *
+     * The `<style>` *element* has run its text through hasDangerousStyleContent()
+     * since GHSA-93vf-569f-22cq, which normalizes CSS escapes and catches
+     * `@import`, `expression()` and `data:`. Inline `style` *attributes* were
+     * only ever checked by the EXTERNAL_URL regex, so the identical payload was
+     * blocked in a `<style>` block and waved through as an attribute — including
+     * escape forms such as `url(\2f\2f evil.example/x)` that no amount of
+     * scheme-matching catches. Reuse the element-side check so both paths agree.
+     * (GHSA-jfrr-ch68-f2w9)
+     *
+     * @param string $attr_name
+     * @param $attr_value
+     * @return bool
+     */
+    protected function isDangerousStyleAttribute(string $attr_name, $attr_value): bool
+    {
+        if (strtolower($attr_name) !== 'style') {
+            return false;
+        }
+
+        return $this->hasDangerousStyleContent((string) $attr_value);
     }
 
     /**

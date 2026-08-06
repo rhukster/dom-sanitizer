@@ -518,6 +518,118 @@ final class DomSanitizerTest extends TestCase
         ];
     }
 
+    // =========================================================================
+    // GHSA-jfrr-ch68-f2w9: same CSS injection via the inline `style` ATTRIBUTE.
+    // The <style> element was covered by GHSA-93vf-569f-22cq; the attribute
+    // path only had the quote-requiring EXTERNAL_URL regex, so every payload
+    // below was blocked as element text and waved through as an attribute.
+    // =========================================================================
+
+    /**
+     * @dataProvider providerDangerousStyleAttribute
+     */
+    public function testDangerousStyleAttributeStripped(int $mode, string $input, string $description): void
+    {
+        $sanitizer = new DOMSanitizer($mode);
+        $output = $sanitizer->sanitize($input);
+
+        $this->assertStringNotContainsString('evil.example', $output, "Failed: $description");
+        $this->assertStringNotContainsString('@import', $output, "Failed: $description");
+        $this->assertStringNotContainsString('expression(', $output, "Failed: $description");
+        $this->assertStringNotContainsString('data:', $output, "Failed: $description");
+    }
+
+    public static function providerDangerousStyleAttribute(): array
+    {
+        return [
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill: url(//evil.example/x)"/></svg>',
+                'style attr with unquoted protocol-relative url() (the reported vector)',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill: url(https://evil.example/x)"/></svg>',
+                'style attr with unquoted https url()',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill: URL(//evil.example/x)"/></svg>',
+                'style attr with uppercase URL()',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill: url (//evil.example/x)"/></svg>',
+                'style attr with whitespace before the paren',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill: url(\\68 ttps://evil.example/x)"/></svg>',
+                'style attr with CSS hex-escaped scheme',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill: url(\\2f\\2f evil.example/x)"/></svg>',
+                'style attr with CSS hex-escaped slashes',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="@import url(//evil.example/x)"/></svg>',
+                'style attr with @import',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="width: expression(alert(1))"/></svg>',
+                'style attr with expression()',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill: url(&quot;data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=&quot;)"/></svg>',
+                'style attr with data: url(), which slipped through even quoted',
+            ],
+            [
+                DOMSanitizer::HTML,
+                '<div style="background: url(//evil.example/x)"></div>',
+                'HTML style attr with unquoted protocol-relative url()',
+            ],
+        ];
+    }
+
+    /**
+     * The fix must not strip legitimate CSS: same-document fragment references
+     * and ordinary declarations have to survive.
+     *
+     * @dataProvider providerBenignStyleAttribute
+     */
+    public function testBenignStyleAttributePreserved(string $input, string $expected_fragment, string $description): void
+    {
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+        $output = $sanitizer->sanitize($input);
+
+        $this->assertStringContainsString($expected_fragment, $output, "Failed: $description");
+    }
+
+    public static function providerBenignStyleAttribute(): array
+    {
+        return [
+            [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill: url(#grad)"/></svg>',
+                'url(#grad)',
+                'fragment reference must be preserved',
+            ],
+            [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill: red"/></svg>',
+                'fill: red',
+                'plain declaration must be preserved',
+            ],
+            [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="stroke-width: 2; opacity: 0.5"/></svg>',
+                'stroke-width: 2',
+                'multiple plain declarations must be preserved',
+            ],
+        ];
+    }
+
     /**
      * Legitimate <style> content must survive sanitization, including
      * fragment-only url(#id) references used by SVG defs/gradients/filters.
