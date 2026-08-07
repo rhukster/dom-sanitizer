@@ -28,6 +28,10 @@ class DOMSanitizer
     const WHITESPACE_FROM = ['/\>[^\S ]+/s', '/[^\S ]+\</s', '/(\s)+/s', '/> </s'];
     const WHITESPACE_TO =  ['>', '<', '\\1', '><'];
     const HTML_COMMENTS = '/<!--.*?-->/s';
+    // An unterminated `/*` runs to end-of-input in CSS, so the closer is optional.
+    const CSS_COMMENTS = '~/\*.*?(?:\*/|$)~s';
+    // Schemes that make the browser fetch something off-origin.
+    const CSS_EXTERNAL_SCHEME = '(?:https?:|ftp:|\/\/|data:)';
 
     private static $root = ['html', 'body'];
     private static $html = ['a', 'abbr', 'acronym', 'address', 'area', 'article', 'aside', 'audio', 'b', 'bdi', 'bdo', 'big', 'blink', 'blockquote', 'body', 'br', 'button', 'canvas', 'caption', 'center', 'cite', 'code', 'col', 'colgroup', 'content', 'data', 'datalist', 'dd', 'decorator', 'del', 'details', 'dfn', 'dialog', 'dir', 'div', 'dl', 'dt', 'element', 'em', 'fieldset', 'figcaption', 'figure', 'font', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hgroup', 'hr', 'html', 'i', 'img', 'input', 'ins', 'kbd', 'label', 'legend', 'li', 'main', 'map', 'mark', 'marquee', 'menu', 'menuitem', 'meter', 'nav', 'nobr', 'ol', 'optgroup', 'option', 'output', 'p', 'picture', 'pre', 'progress', 'q', 'rp', 'rt', 'ruby', 's', 'samp', 'section', 'select', 'shadow', 'small', 'source', 'spacer', 'span', 'strike', 'strong', 'style', 'sub', 'summary', 'sup', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot', 'th', 'thead', 'time', 'tr', 'track', 'tt', 'u', 'ul', 'var', 'video', 'wbr'];
@@ -375,7 +379,49 @@ class DOMSanitizer
      */
     protected function hasDangerousStyleContent(string $css): bool
     {
-        $normalized = preg_replace_callback(
+        $normalized = $this->normalizeCss($css);
+
+        if (preg_match('/@import\b/i', $normalized)) {
+            return true;
+        }
+        if (preg_match('/url\s*\(\s*["\']?\s*' . self::CSS_EXTERNAL_SCHEME . '/i', $normalized)) {
+            return true;
+        }
+        // image-set() loads a resource without ever using url(), so the check
+        // above cannot see it. (GHSA-ww22-4mqv-x5w3)
+        if (preg_match('/(?:-webkit-)?image-set\s*\([^)]*["\']\s*' . self::CSS_EXTERNAL_SCHEME . '/i', $normalized)) {
+            return true;
+        }
+        if (preg_match('/expression\s*\(/i', $normalized)) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Normalizes CSS into the form a browser's tokenizer sees, so the
+     * dangerous-token checks cannot be split apart by syntax the browser
+     * discards.
+     *
+     * Order matters:
+     *  1. Comments are removed first. As far as the checks are concerned a
+     *     comment can sit *inside* a token, so leaving them in means every
+     *     token check can be cut in half.
+     *  2. CSS escapes are decoded, so `\68 ttps:` is seen as the scheme it is.
+     *  3. Comments are stripped a second time, because step 2 can *synthesize*
+     *     one: `\2f\2a` decodes to `/*`, which did not exist during step 1.
+     *
+     * Whitespace is deliberately left alone. It is equally inert to browsers,
+     * and collapsing it would risk false positives on legitimate multi-line CSS.
+     *
+     * @param string $css
+     * @return string
+     */
+    protected function normalizeCss(string $css): string
+    {
+        $css = $this->stripCssComments($css);
+
+        $css = preg_replace_callback(
             '/\\\\([0-9a-fA-F]{1,6})[ \t\n\r\f]?/',
             function ($m) {
                 $code = hexdec($m[1]);
@@ -385,19 +431,21 @@ class DOMSanitizer
                 return mb_chr($code, 'UTF-8') ?: '';
             },
             $css
-        );
-        $normalized = preg_replace('/\\\\([^0-9a-fA-F\r\n\f])/', '$1', $normalized);
+        ) ?? $css;
+        $css = preg_replace('/\\\\([^0-9a-fA-F\r\n\f])/', '$1', $css) ?? $css;
 
-        if (preg_match('/@import\b/i', $normalized)) {
-            return true;
-        }
-        if (preg_match('/url\s*\(\s*["\']?\s*(?:https?:|ftp:|\/\/|data:)/i', $normalized)) {
-            return true;
-        }
-        if (preg_match('/expression\s*\(/i', $normalized)) {
-            return true;
-        }
-        return false;
+        return $this->stripCssComments($css);
+    }
+
+    /**
+     * Removes CSS comments, including an unterminated trailing one.
+     *
+     * @param string $css
+     * @return string
+     */
+    protected function stripCssComments(string $css): string
+    {
+        return preg_replace(self::CSS_COMMENTS, '', $css) ?? $css;
     }
 
     /**
