@@ -595,6 +595,85 @@ final class DomSanitizerTest extends TestCase
         ];
     }
 
+    // =========================================================================
+    // GHSA-ww22-4mqv-x5w3: the dangerous-token checks ran against the raw
+    // declaration, so a CSS comment dropped inside a token split the value the
+    // checks were looking for. image-set() was missed entirely, because it
+    // loads a resource without ever writing url().
+    // =========================================================================
+
+    /**
+     * @dataProvider providerCommentObfuscatedStyle
+     */
+    public function testCommentObfuscatedStyleStripped(int $mode, string $input, string $description): void
+    {
+        $sanitizer = new DOMSanitizer($mode);
+        $output = $sanitizer->sanitize($input);
+
+        $this->assertStringNotContainsString('evil.example', $output, "Failed: $description");
+    }
+
+    public static function providerCommentObfuscatedStyle(): array
+    {
+        return [
+            [
+                DOMSanitizer::HTML,
+                '<div style="background:u/**/rl(https://evil.example/x)"></div>',
+                'comment splitting the url token (the reported vector)',
+            ],
+            [
+                DOMSanitizer::HTML,
+                '<div style="background:url(/*x*/https://evil.example/x)"></div>',
+                'comment between the paren and the scheme',
+            ],
+            [
+                DOMSanitizer::HTML,
+                '<div style="background:url(htt/**/ps://evil.example/x)"></div>',
+                'comment splitting the scheme itself',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><style>rect{background:@im/**/port url(https://evil.example/x)}</style></svg>',
+                'comment splitting @import in a style element',
+            ],
+            [
+                DOMSanitizer::HTML,
+                '<div style="background:url(\\2f\\2a x\\2a\\2f &quot;https://evil.example/x&quot;)"></div>',
+                'escape sequence that decodes into a comment, which needs the second strip',
+            ],
+            [
+                DOMSanitizer::HTML,
+                '<div style="background-image:image-set(&quot;https://evil.example/x&quot; 1x)"></div>',
+                'image-set() with an external url and no url() anywhere',
+            ],
+            [
+                DOMSanitizer::HTML,
+                '<div style="background-image:-webkit-image-set(&quot;https://evil.example/x&quot; 1x)"></div>',
+                'prefixed -webkit-image-set()',
+            ],
+            [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect style="background-image:image-set(&quot;//evil.example/x&quot; 1x)"/></svg>',
+                'image-set() with a protocol-relative url',
+            ],
+        ];
+    }
+
+    /**
+     * Normalizing CSS must not start rejecting legitimate declarations:
+     * relative image-set() references and commented but harmless CSS survive.
+     */
+    public function testBenignCommentedAndImageSetCssPreserved(): void
+    {
+        $sanitizer = new DOMSanitizer(DOMSanitizer::HTML);
+
+        $output = $sanitizer->sanitize('<div style="background-image:image-set(&quot;cat.png&quot; 1x, &quot;cat2.png&quot; 2x)"></div>');
+        $this->assertStringContainsString('cat.png', $output, 'relative image-set() must survive');
+
+        $output = $sanitizer->sanitize('<div style="/* brand colour */ color:red"></div>');
+        $this->assertStringContainsString('color:red', $output, 'a declaration carrying a comment must survive');
+    }
+
     /**
      * The fix must not strip legitimate CSS: same-document fragment references
      * and ordinary declarations have to survive.
