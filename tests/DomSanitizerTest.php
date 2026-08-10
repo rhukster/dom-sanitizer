@@ -656,6 +656,26 @@ final class DomSanitizerTest extends TestCase
                 '<svg xmlns="http://www.w3.org/2000/svg"><rect style="background-image:image-set(&quot;//evil.example/x&quot; 1x)"/></svg>',
                 'image-set() with a protocol-relative url',
             ],
+            [
+                DOMSanitizer::HTML,
+                '<style>body{content:"/*"}body{background-image:url(https://evil.example/x)}</style>',
+                'unterminated /* inside a string must not hide the rest of the sheet',
+            ],
+            [
+                DOMSanitizer::HTML,
+                '<div style="background-image:image-set(url(a.png) 1x, &quot;https://evil.example/x&quot; 2x)"></div>',
+                'image-set() external candidate behind another argument',
+            ],
+            [
+                DOMSanitizer::HTML,
+                '<div style="background:cross-fade(image-set(url(a.png) 1x, &quot;https://evil.example/x&quot; 2x), 50%)"></div>',
+                'external candidate nested inside cross-fade(image-set())',
+            ],
+            [
+                DOMSanitizer::HTML,
+                '<style>:root{--u:"https://evil.example/x"}body{background-image:image-set(var(--u) 1x)}</style>',
+                'external url smuggled through a custom property and var()',
+            ],
         ];
     }
 
@@ -672,6 +692,12 @@ final class DomSanitizerTest extends TestCase
 
         $output = $sanitizer->sanitize('<div style="/* brand colour */ color:red"></div>');
         $this->assertStringContainsString('color:red', $output, 'a declaration carrying a comment must survive');
+
+        $output = $sanitizer->sanitize('<div style="content:&quot;visit https://example.com&quot;;color:red"></div>');
+        $this->assertStringContainsString('color:red', $output, 'a url shown only as content text is not an image reference');
+
+        $output = $sanitizer->sanitize('<div style="fill:url(#grad)"></div>');
+        $this->assertStringContainsString('url(#grad)', $output, 'a same-document fragment reference must survive');
     }
 
     /**
