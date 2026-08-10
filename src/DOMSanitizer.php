@@ -387,14 +387,124 @@ class DOMSanitizer
         if (preg_match('/url\s*\(\s*["\']?\s*' . self::CSS_EXTERNAL_SCHEME . '/i', $normalized)) {
             return true;
         }
-        // image-set() loads a resource without ever using url(), so the check
-        // above cannot see it. (GHSA-ww22-4mqv-x5w3)
-        if (preg_match('/(?:-webkit-)?image-set\s*\([^)]*["\']\s*' . self::CSS_EXTERNAL_SCHEME . '/i', $normalized)) {
-            return true;
-        }
         if (preg_match('/expression\s*\(/i', $normalized)) {
             return true;
         }
+        // image-set(), cross-fade() and image() load a resource through a quoted
+        // string without ever using url(), and the string can sit behind other
+        // arguments or nested functions that a single `[^)]*` regex cannot cross
+        // (image-set(url(a.png) 1x, "https://evil" 2x)). A custom property can also
+        // carry the string and be pulled in later with var(). Walk the CSS once,
+        // string-aware and paren-aware, to catch all of these. (GHSA-ww22-4mqv-x5w3)
+        if ($this->hasExternalSchemeInImageContext($normalized)) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Off-origin schemes for the CSS string scan, anchored at the start of the
+     * string value so `background: "not a url https://x"` in `content` is ignored.
+     */
+    const CSS_STRING_EXTERNAL_SCHEME = '~^\s*(?:https?:|ftp:|//|data:)~i';
+
+    /**
+     * Functions that fetch a resource named by a quoted string argument.
+     */
+    const CSS_IMAGE_FUNCTIONS = ['image-set', '-webkit-image-set', 'cross-fade', '-webkit-cross-fade', 'image'];
+
+    /**
+     * Single string- and paren-aware pass over normalized CSS. Flags a quoted
+     * string beginning with an off-origin scheme when it is an argument (at any
+     * nesting depth) to an image function, or the value of a custom property that
+     * `var()` could later feed into one. Legitimate uses -- a relative image-set
+     * candidate, or a URL merely displayed via `content` -- are left alone.
+     *
+     * @param string $css
+     * @return bool
+     */
+    protected function hasExternalSchemeInImageContext(string $css): bool
+    {
+        $len = strlen($css);
+        $funcStack = [];      // lower-cased function name per open paren
+        $prop = '';           // property name of the current declaration
+        $readingProp = true;  // true until the declaration's ':'
+        $i = 0;
+
+        while ($i < $len) {
+            $c = $css[$i];
+
+            // String literal: capture it, then classify.
+            if ($c === '"' || $c === "'") {
+                $quote = $c;
+                $i++;
+                $value = '';
+                while ($i < $len) {
+                    if ($css[$i] === '\\' && $i + 1 < $len) {
+                        $value .= $css[$i + 1];
+                        $i += 2;
+                        continue;
+                    }
+                    if ($css[$i] === $quote) {
+                        break;
+                    }
+                    $value .= $css[$i];
+                    $i++;
+                }
+                $i++; // past the closing quote (or EOF)
+
+                if (preg_match(self::CSS_STRING_EXTERNAL_SCHEME, $value)) {
+                    foreach ($funcStack as $fn) {
+                        if (in_array($fn, self::CSS_IMAGE_FUNCTIONS, true)) {
+                            return true;
+                        }
+                    }
+                    if (strncmp($prop, '--', 2) === 0) {
+                        return true;
+                    }
+                }
+                continue;
+            }
+
+            // Function open: the identifier immediately before '(' is its name.
+            if ($c === '(') {
+                $j = $i - 1;
+                $name = '';
+                while ($j >= 0 && preg_match('/[a-z0-9\-]/i', $css[$j])) {
+                    $name = $css[$j] . $name;
+                    $j--;
+                }
+                $funcStack[] = strtolower($name);
+                $i++;
+                continue;
+            }
+            if ($c === ')') {
+                array_pop($funcStack);
+                $i++;
+                continue;
+            }
+
+            // Declaration boundaries (only meaningful outside any function).
+            if (empty($funcStack)) {
+                if ($c === ':') {
+                    $readingProp = false;
+                    $i++;
+                    continue;
+                }
+                if ($c === ';' || $c === '{' || $c === '}') {
+                    $prop = '';
+                    $readingProp = true;
+                    $i++;
+                    continue;
+                }
+                if ($readingProp && preg_match('/[a-z0-9\-]/i', $c)) {
+                    $prop .= $c;
+                }
+            }
+
+            $i++;
+        }
+
         return false;
     }
 
@@ -438,14 +548,63 @@ class DOMSanitizer
     }
 
     /**
-     * Removes CSS comments, including an unterminated trailing one.
+     * Removes CSS comments, string-aware.
+     *
+     * A plain regex treats a `/*` sequence that appears inside a string literal
+     * as the start of a comment, so an unterminated one -- `content:"/*"` -- would
+     * swallow everything after it, hiding whatever dangerous tokens followed. To a
+     * browser that `/*` is just string content, not a comment. Walk the CSS and
+     * only strip `/* ... *``/` when outside a `"..."` or `'...'` string. An
+     * unterminated real comment still runs to end-of-input.
      *
      * @param string $css
      * @return string
      */
     protected function stripCssComments(string $css): string
     {
-        return preg_replace(self::CSS_COMMENTS, '', $css) ?? $css;
+        $len = strlen($css);
+        $out = '';
+        $quote = null;
+        $i = 0;
+
+        while ($i < $len) {
+            $c = $css[$i];
+
+            if ($quote !== null) {
+                $out .= $c;
+                if ($c === '\\' && $i + 1 < $len) {
+                    $out .= $css[$i + 1];
+                    $i += 2;
+                    continue;
+                }
+                if ($c === $quote) {
+                    $quote = null;
+                }
+                $i++;
+                continue;
+            }
+
+            if ($c === '"' || $c === "'") {
+                $quote = $c;
+                $out .= $c;
+                $i++;
+                continue;
+            }
+
+            if ($c === '/' && $i + 1 < $len && $css[$i + 1] === '*') {
+                $i += 2;
+                while ($i < $len && !($css[$i] === '*' && $i + 1 < $len && $css[$i + 1] === '/')) {
+                    $i++;
+                }
+                $i += 2; // past the closing */ (harmless past EOF)
+                continue;
+            }
+
+            $out .= $c;
+            $i++;
+        }
+
+        return $out;
     }
 
     /**
