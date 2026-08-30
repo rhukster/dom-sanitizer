@@ -21,6 +21,10 @@ class DOMSanitizer
     const EXTERNAL_URL = "/url\s*\(\s*[\"']?\s*(ftp:\/\/|http:\/\/|https:\/\/|\/\/|data:)/i";
     const JAVASCRIPT_ATTR = "/(\s(?:href|xlink\:href)\s*=\s*\"javascript:.*?\")/i";
     const SNEAKY_ONLOAD = "/(\s(?:href|xlink\:href)\s*=\s*\"data:.*onload.*?\")/i";
+    // Belt-and-braces for the post-serialization pass: any `data:` href whose
+    // declared MIME is not an inert image type is stripped, mirroring the
+    // scheme-level policy in isDangerousUrl(). (GHSA-wcj2-r6vg-rm97)
+    const SNEAKY_DATA_URL = "/(\s(?:href|xlink\:href)\s*=\s*\"data:(?!image\/(?:png|jpe?g|gif|webp|bmp|x-icon|vnd\.microsoft\.icon)[;,])[^\"]*\")/i";
     const NAMESPACE_TAGS = '/xmlns[^=]*="[^"]*"/i';
     const HTML_TAGS = "~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i";
     const PHP_TAGS = '/<\?(=|php)(.+?)\?>/i';
@@ -338,8 +342,11 @@ class DOMSanitizer
 
     /**
      * Determines if an href/xlink:href attribute contains a dangerous URL scheme
-     * (javascript:, data: with script content). Normalizes control characters
-     * before checking to prevent entity-encoding bypasses (CVE-2026-33172 bypass).
+     * (javascript:, or data: whose declared MIME type is not an inert image).
+     * Normalizes control characters before checking to prevent entity-encoding
+     * bypasses (CVE-2026-33172 bypass), and judges data: URLs by scheme policy
+     * rather than payload content, since Base64 encoding defeats substring
+     * matching (GHSA-wcj2-r6vg-rm97).
      *
      * @param string $attr_name
      * @param string $attr_value
@@ -359,8 +366,22 @@ class DOMSanitizer
             return true;
         }
 
-        if (preg_match('/^data:.*onload/i', $normalized)) {
-            return true;
+        // A data: URL carries an embedded document whose type is declared in the
+        // URL itself, and Base64 encoding hides any dangerous marker (`onload`,
+        // `<script>`, ...) from a substring test, so `data:` cannot be judged by
+        // matching against its content. The old `data:.*onload` heuristic let
+        // `data:text/html;base64,...` through. Policy is therefore scheme-level:
+        // only inert image types are allowed through, everything script-capable
+        // (text/html, image/svg+xml, application/xhtml+xml, ...) is rejected.
+        // (GHSA-wcj2-r6vg-rm97)
+        if (preg_match('/^data:/i', $normalized)) {
+            if (!preg_match('/^data:image\/(?:png|jpe?g|gif|webp|bmp|x-icon|vnd\.microsoft\.icon)[;,]/i', $normalized)) {
+                return true;
+            }
+
+            if (preg_match('/^data:.*onload/i', $normalized)) {
+                return true;
+            }
         }
 
         return false;
@@ -617,6 +638,7 @@ class DOMSanitizer
     {
         $output = preg_replace(self::JAVASCRIPT_ATTR, '', $output);
         $output = preg_replace(self::SNEAKY_ONLOAD, '', $output);
+        $output = preg_replace(self::SNEAKY_DATA_URL, '', $output);
         $output = preg_replace(self::HTML_COMMENTS, '', $output);
         return $output;
     }
