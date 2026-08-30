@@ -811,6 +811,121 @@ XML;
         $this->assertStringNotContainsString('lollollollol', $output, 'entities must not have expanded');
     }
 
+    // =========================================================================
+    // GHSA-wcj2-r6vg-rm97: Base64-encoded data: URLs bypass href/xlink:href checks
+    // =========================================================================
+
+    /**
+     * @dataProvider providerDangerousDataUrl
+     */
+    public function testDangerousDataUrlStripped(int $mode, string $input, string $description): void
+    {
+        $sanitizer = new DOMSanitizer($mode);
+        $output = $sanitizer->sanitize($input);
+
+        $this->assertStringNotContainsString('PHNjcmlwdD5', $output, "Failed: $description");
+        $this->assertStringNotContainsString('data:text/html', $output, "Failed: $description");
+        $this->assertStringNotContainsString('data:image/svg+xml', $output, "Failed: $description");
+        $this->assertStringNotContainsString('data:application/xhtml+xml', $output, "Failed: $description");
+        $this->assertStringNotContainsString('data:image/xml', $output, "Failed: $description");
+    }
+
+    public static function providerDangerousDataUrl(): array
+    {
+        $b64_script = 'PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=='; // <script>alert(1)</script>
+        $b64_svg = base64_encode('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>');
+        $b64_xhtml = base64_encode('<html xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></html>');
+
+        return [
+            'svg href base64 text/html' => [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><a href="data:text/html;base64,' . $b64_script . '"><rect/></a></svg>',
+                'href with base64 data:text/html should be stripped'
+            ],
+            'svg xlink:href base64 text/html' => [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><a xlink:href="data:text/html;base64,' . $b64_script . '"><rect/></a></svg>',
+                'xlink:href with base64 data:text/html should be stripped'
+            ],
+            'svg image href base64 image/svg+xml' => [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/svg+xml;base64,' . $b64_svg . '"/></svg>',
+                'image href with base64 data:image/svg+xml should be stripped'
+            ],
+            'svg href base64 application/xhtml+xml' => [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><a href="data:application/xhtml+xml;base64,' . $b64_xhtml . '"><rect/></a></svg>',
+                'href with base64 data:application/xhtml+xml should be stripped'
+            ],
+            'svg href base64 image/xml' => [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><a href="data:image/xml;base64,' . $b64_script . '"><rect/></a></svg>',
+                'href with base64 data:image/xml should be stripped'
+            ],
+            'svg href plain text/html' => [
+                DOMSanitizer::SVG,
+                '<svg xmlns="http://www.w3.org/2000/svg"><a href="data:text/html,&lt;script&gt;alert(1)&lt;/script&gt;"><rect/></a></svg>',
+                'href with plain data:text/html should be stripped'
+            ],
+            'html href base64 text/html' => [
+                DOMSanitizer::HTML,
+                '<a href="data:text/html;base64,' . $b64_script . '">x</a>',
+                'HTML-mode href with base64 data:text/html should be stripped'
+            ],
+            'html href data: with no mime' => [
+                DOMSanitizer::HTML,
+                '<a href="data:,' . $b64_script . '">x</a>',
+                'HTML-mode href with bare data: URL should be stripped'
+            ],
+        ];
+    }
+
+    /**
+     * @dataProvider providerBenignDataUrl
+     */
+    public function testBenignDataUrlPreserved(string $url, string $description): void
+    {
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+        $input = '<svg xmlns="http://www.w3.org/2000/svg"><image href="' . $url . '"/></svg>';
+        $output = $sanitizer->sanitize($input);
+
+        $this->assertStringContainsString($url, $output, "Failed: $description");
+    }
+
+    public static function providerBenignDataUrl(): array
+    {
+        return [
+            [
+                'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+                'data:image/png;base64 href should be preserved'
+            ],
+            [
+                'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPDIzNP/AABEIAAEAAQMBIgACEQEDEQH/xAAfAAABBQEBAQEBAQAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/aAAwDAQACEQMRAD8A/v4ooooA/9k=',
+                'data:image/jpeg;base64 href should be preserved'
+            ],
+            [
+                'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+                'data:image/gif;base64 href should be preserved'
+            ],
+            [
+                'data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==',
+                'data:image/webp;base64 href should be preserved'
+            ],
+            [
+                'data:image/x-icon;base64,AAABAAEAEBAQAAEABAAoAQAAFgAAACgAAAAQAAAAIAAAAAEABAAAAAAAgAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAA////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/dgAA/3YAAP92AAD/dgAA/3YAAP92AAD/dgAA/3YAAP92AAD/dgAA/3YAAP92AAD/dgAA/3YAAP92AAD/dgAA',
+                'data:image/x-icon;base64 href should be preserved'
+            ],
+        ];
+    }
+
+    public function testJavascriptUrlStillStripped(): void
+    {
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+        $output = $sanitizer->sanitize('<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><rect/></a></svg>');
+
+        $this->assertStringNotContainsString('javascript:', $output, 'javascript: href should still be stripped');
+    }
+
     protected function assertEqualHtml($expected, $actual, $message = '')
     {
         $from = ['/\>[^\S ]+/s', '/[^\S ]+\</s', '/(\s)+/s', '/> </s'];
