@@ -1065,6 +1065,110 @@ XML;
         ];
     }
 
+    // =========================================================================
+    // GHSA-cjfg-j8jp-5xvc: SVG presentation attributes carry CSS url() values,
+    // but isExternalUrl() matched the raw value — a CSS comment or hex escape
+    // between url( and the scheme defeated the match while the browser's CSS
+    // tokenizer still resolved it into an external reference.
+    // =========================================================================
+
+    /**
+     * @dataProvider providerDangerousPresentationAttribute
+     */
+    public function testDangerousPresentationAttributeStripped(string $input, string $description): void
+    {
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+        $output = $sanitizer->sanitize($input);
+
+        $this->assertStringNotContainsString('evil.example', $output, "Failed: $description");
+    }
+
+    public static function providerDangerousPresentationAttribute(): array
+    {
+        return [
+            'fill plain external url()' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(//evil.example/x)"/></svg>',
+                'plain external url() in fill should be stripped (control case)',
+            ],
+            'fill hex-escaped slashes' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(\\2f\\2f evil.example/x)"/></svg>',
+                'hex-escaped protocol-relative url() in fill (the reported vector) should be stripped',
+            ],
+            'fill comment before scheme' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(/**/ //evil.example/x)"/></svg>',
+                'comment-obfuscated url() in fill should be stripped',
+            ],
+            'fill comment inside scheme' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(htt/**/ps://evil.example/x)"/></svg>',
+                'comment splitting the scheme in fill should be stripped',
+            ],
+            'fill hex-escaped data scheme' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(\\64 ata:image/svg+xml;base64,xxx)"/></svg>',
+                'hex-escaped data: scheme in fill should be stripped',
+            ],
+            'stroke escaped' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect stroke="url(\\2f\\2f evil.example/x)"/></svg>',
+                'hex-escaped url() in stroke should be stripped',
+            ],
+            'marker-end escaped' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><path marker-end="url(\\2f\\2f evil.example/x)"/></svg>',
+                'hex-escaped url() in marker-end should be stripped',
+            ],
+            'mask commented' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect mask="url(/*c*/https://evil.example/x)"/></svg>',
+                'comment-obfuscated url() in mask should be stripped',
+            ],
+            'clip-path commented' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect clip-path="url(/**/ //evil.example/x)"/></svg>',
+                'comment-obfuscated url() in clip-path should be stripped',
+            ],
+            'filter escaped in html mode' => [
+                '<div><svg xmlns="http://www.w3.org/2000/svg"><rect filter="url(\\2f\\2f evil.example/x)"/></svg></div>',
+                'hex-escaped url() in filter in HTML mode should be stripped',
+            ],
+        ];
+    }
+
+    /**
+     * The normalization must not strip legitimate presentation attributes:
+     * same-document fragment references and plain paint values survive.
+     *
+     * @dataProvider providerBenignPresentationAttribute
+     */
+    public function testBenignPresentationAttributePreserved(string $input, string $expected_fragment, string $description): void
+    {
+        $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
+        $output = $sanitizer->sanitize($input);
+
+        $this->assertStringContainsString($expected_fragment, $output, "Failed: $description");
+    }
+
+    public static function providerBenignPresentationAttribute(): array
+    {
+        return [
+            'fragment reference in fill' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(#grad)"/></svg>',
+                'fill="url(#grad)"',
+                'fragment reference in fill must be preserved',
+            ],
+            'fragment references in fill and stroke' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(#g)" stroke="url(#p)"/></svg>',
+                'stroke="url(#p)"',
+                'fragment references in fill and stroke must be preserved',
+            ],
+            'plain paint value' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="red"/></svg>',
+                'fill="red"',
+                'plain paint value must be preserved',
+            ],
+            'path data with slashes and digits' => [
+                '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0,0 L10/2,20"/></svg>',
+                'd="M0,0 L10/2,20"',
+                'path data must be preserved untouched by CSS normalization',
+            ],
+        ];
+    }
+
     protected function assertEqualHtml($expected, $actual, $message = '')
     {
         $from = ['/\>[^\S ]+/s', '/[^\S ]+\</s', '/(\s)+/s', '/> </s'];

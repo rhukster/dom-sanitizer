@@ -306,12 +306,20 @@ class DOMSanitizer
     /**
      * Determines if the attribute value is an external link
      *
+     * SVG presentation attributes (fill, stroke, filter, clip-path, mask,
+     * marker-*) carry CSS url() values, and a CSS comment or hex escape placed
+     * between `url(` and the scheme defeats a raw regex match while the
+     * browser's CSS tokenizer still decodes it into a live external reference.
+     * The <style>/style paths already normalize before their checks, so the
+     * same normalizer runs here, making every url()-carrying attribute agree.
+     * (GHSA-cjfg-j8jp-5xvc)
+     *
      * @param $attr_value
      * @return bool
      */
     protected function isExternalUrl($attr_value): bool
     {
-        return preg_match(self::EXTERNAL_URL, $attr_value);
+        return preg_match(self::EXTERNAL_URL, $this->normalizeCss((string) $attr_value));
     }
 
     /**
