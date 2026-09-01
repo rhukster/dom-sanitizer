@@ -926,6 +926,145 @@ XML;
         $this->assertStringNotContainsString('javascript:', $output, 'javascript: href should still be stripped');
     }
 
+    // =========================================================================
+    // GHSA-mrpv-6x26-mf6c: isDangerousUrl() gated on href/xlink:href only, so
+    // javascript:/data: URIs survived in every other URL-bearing attribute the
+    // allow-list admits — most notably form action, which yields a complete,
+    // submittable form whose submission executes the payload (stored XSS).
+    // =========================================================================
+
+    /**
+     * @dataProvider providerDangerousUrlAttribute
+     */
+    public function testDangerousUrlAttributeStripped(int $mode, string $input, string $description): void
+    {
+        $sanitizer = new DOMSanitizer($mode);
+        $output = $sanitizer->sanitize($input);
+
+        $this->assertStringNotContainsString('javascript:', $output, "Failed: $description");
+        $this->assertStringNotContainsString('PHNjcmlwdD5', $output, "Failed: $description");
+        $this->assertStringNotContainsString('data:text/html', $output, "Failed: $description");
+    }
+
+    public static function providerDangerousUrlAttribute(): array
+    {
+        $b64_script = 'PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=='; // <script>alert(1)</script>
+
+        return [
+            'form action javascript' => [
+                DOMSanitizer::HTML,
+                '<form action="javascript:alert(document.cookie)"><input type="submit" value="go"></form>',
+                'form action with javascript: URI (the reported vector) should be stripped',
+            ],
+            'form action data:text/html' => [
+                DOMSanitizer::HTML,
+                '<form action="data:text/html;base64,' . $b64_script . '"><button>go</button></form>',
+                'form action with base64 data:text/html should be stripped',
+            ],
+            'blockquote cite javascript' => [
+                DOMSanitizer::HTML,
+                '<blockquote cite="javascript:alert(1)">q</blockquote>',
+                'cite with javascript: URI should be stripped',
+            ],
+            'video poster javascript' => [
+                DOMSanitizer::HTML,
+                '<video poster="javascript:alert(1)"></video>',
+                'poster with javascript: URI should be stripped',
+            ],
+            'img src javascript' => [
+                DOMSanitizer::HTML,
+                '<img src="javascript:alert(1)">',
+                'src with javascript: URI should be stripped',
+            ],
+            'img src data:text/html' => [
+                DOMSanitizer::HTML,
+                '<img src="data:text/html;base64,' . $b64_script . '">',
+                'src with base64 data:text/html should be stripped',
+            ],
+            'img srcset javascript in later candidate' => [
+                DOMSanitizer::HTML,
+                '<img srcset="a.png 1x, javascript:alert(1) 2x">',
+                'srcset with a javascript: scheme hidden in a later candidate should be stripped',
+            ],
+            'img srcset data:text/html' => [
+                DOMSanitizer::HTML,
+                '<img srcset="data:text/html;base64,' . $b64_script . ' 1x">',
+                'srcset with base64 data:text/html should be stripped',
+            ],
+            'table background javascript' => [
+                DOMSanitizer::HTML,
+                '<table background="javascript:alert(1)"><tr><td>x</td></tr></table>',
+                'background with javascript: URI should be stripped',
+            ],
+            'control chars before the scheme in action' => [
+                DOMSanitizer::HTML,
+                "<form action=\"java\tscript:alert(1)\"><input type=\"submit\"></form>",
+                'action with control characters splitting the scheme should be stripped',
+            ],
+        ];
+    }
+
+    /**
+     * Legitimate URL-bearing attribute values must survive the widened check.
+     *
+     * @dataProvider providerBenignUrlAttribute
+     */
+    public function testBenignUrlAttributePreserved(int $mode, string $input, string $expected_fragment, string $description): void
+    {
+        $sanitizer = new DOMSanitizer($mode);
+        $output = $sanitizer->sanitize($input);
+
+        $this->assertStringContainsString($expected_fragment, $output, "Failed: $description");
+    }
+
+    public static function providerBenignUrlAttribute(): array
+    {
+        return [
+            'relative form action' => [
+                DOMSanitizer::HTML,
+                '<form action="/submit"><input type="submit"></form>',
+                'action="/submit"',
+                'relative form action must be preserved',
+            ],
+            'absolute form action' => [
+                DOMSanitizer::HTML,
+                '<form action="https://example.com/submit"></form>',
+                'action="https://example.com/submit"',
+                'absolute form action must be preserved',
+            ],
+            'blockquote cite' => [
+                DOMSanitizer::HTML,
+                '<blockquote cite="https://example.com/source">q</blockquote>',
+                'cite="https://example.com/source"',
+                'legitimate cite must be preserved',
+            ],
+            'img src' => [
+                DOMSanitizer::HTML,
+                '<img src="photo.jpg">',
+                'src="photo.jpg"',
+                'relative src must be preserved',
+            ],
+            'img src inert data image' => [
+                DOMSanitizer::HTML,
+                '<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUg">',
+                'src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUg"',
+                'inert data:image/png src must be preserved',
+            ],
+            'img srcset multiple candidates' => [
+                DOMSanitizer::HTML,
+                '<img srcset="a.png 1x, b.png 2x">',
+                'srcset="a.png 1x, b.png 2x"',
+                'multi-candidate srcset must be preserved',
+            ],
+            'video poster' => [
+                DOMSanitizer::HTML,
+                '<video poster="poster.png"></video>',
+                'poster="poster.png"',
+                'legitimate poster must be preserved',
+            ],
+        ];
+    }
+
     protected function assertEqualHtml($expected, $actual, $message = '')
     {
         $from = ['/\>[^\S ]+/s', '/[^\S ]+\</s', '/(\s)+/s', '/> </s'];
