@@ -114,6 +114,7 @@ class DOMSanitizer
         $document->preserveWhiteSpace = false;
         $document->strictErrorChecking = false;
         $document->formatOutput = true;
+        $this->sanitizeDocumentNodes($document);
 
         $tags = array_diff($this->allowed_tags, $this->disallowed_tags);
         $attributes = array_diff($this->allowed_attributes, $this->disallowed_attributes);
@@ -124,6 +125,10 @@ class DOMSanitizer
             $tag_name = $element->tagName;
             $tag_name_lower = strtolower($tag_name);
             if(in_array($tag_name_lower, $tags)) {
+                if ($this->hasDangerousAnimationTarget($element)) {
+                    $element->parentNode->removeChild($element);
+                    continue;
+                }
                 if ($tag_name_lower === 'style' && $this->hasDangerousStyleContent($element->textContent)) {
                     $element->parentNode->removeChild($element);
                     continue;
@@ -170,6 +175,54 @@ class DOMSanitizer
         }
 
         return trim($output);
+    }
+
+    /**
+     * XML processing instructions and comments can hide markup that becomes
+     * active when SVG/MathML is embedded in HTML. CDATA has the same risk at
+     * HTML integration points, so preserve its content as escaped text instead.
+     * Walk all nodes, including siblings of the document element; the element
+     * allow-list alone never visits these nodes. (GHSA-4hr3-f334-mcr4)
+     */
+    protected function sanitizeDocumentNodes(\DOMNode $node): void
+    {
+        for ($i = $node->childNodes->length; --$i >= 0;) {
+            $child = $node->childNodes->item($i);
+            if ($child->nodeType === XML_PI_NODE || $child->nodeType === XML_COMMENT_NODE) {
+                $node->removeChild($child);
+            } elseif ($child->nodeType === XML_CDATA_SECTION_NODE) {
+                $node->replaceChild($child->ownerDocument->createTextNode($child->nodeValue), $child);
+            } elseif ($child->hasChildNodes()) {
+                $this->sanitizeDocumentNodes($child);
+            }
+        }
+    }
+
+    /**
+     * An animation can recreate a dangerous attribute after sanitization,
+     * even when its static value was removed. WebKit allows animateTransform
+     * to target href, despite the element's name. Reject the whole animation
+     * independently of its values, timing, or tag. (GHSA-7x4f-fj83-6xfw)
+     */
+    protected function hasDangerousAnimationTarget(\DOMElement $element): bool
+    {
+        foreach ($element->attributes as $attribute) {
+            if (strtolower($attribute->localName) !== 'attributename') {
+                continue;
+            }
+
+            // Compare the local target name so xlink:href and namespace aliases
+            // cannot bypass the policy. DOM parsing already decoded entities.
+            $parts = explode(':', strtolower(trim($attribute->value)));
+            $target = end($parts);
+            if (in_array($target, self::URL_ATTRS, true) ||
+                $target === 'style' || $target === 'xmlns' ||
+                $parts[0] === 'xmlns' || strncmp($target, 'on', 2) === 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

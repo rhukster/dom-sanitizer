@@ -57,6 +57,10 @@ $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
 $output = $sanitizer->sanitize($input);
 ```
 
+Processing instructions and comments are removed, and CDATA content is preserved as escaped text, so these XML constructs cannot hide HTML markup when sanitized SVG is embedded inline. These checks also apply to MathML and do not depend on the output options.
+
+Animations targeting URL attributes (including `href` and `xlink:href`), event handlers, `style`, or XML namespace declarations are removed entirely, even if their values appear harmless. Normal transform, color, and motion animations remain supported.
+
 ### Sanitizing MathML
 
 You can limit the valid tags and attributes by passing `DOMSanitizer::MATHML` to the constructor.  This is advisable if you know you are dealing with MathML code.
