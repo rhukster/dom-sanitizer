@@ -122,4 +122,63 @@ final class SecurityAdvisoriesTest extends TestCase
         }
         return $cases;
     }
+
+    /** @dataProvider cssEscapeProvider */
+    public function testCssEscapesCannotHideExternalResources(int $mode, string $input): void
+    {
+        $output = (new DOMSanitizer($mode))->sanitize($input);
+        $this->assertStringNotContainsString('attacker.example', $output);
+    }
+
+    public static function cssEscapeProvider(): array
+    {
+        $url = 'https://attacker.example/x.png';
+        $style = static function (string $css): array {
+            return [DOMSanitizer::HTML, '<style>' . $css . '</style>'];
+        };
+        return [
+            // GHSA-94fv-h7hv-365q: a backslash-newline inside a string is a line continuation.
+            'line continuation (LF)' => $style("*{background:url(\"\\\n$url\")}"),
+            'line continuation (CRLF)' => $style("*{background:url('\\\r\n$url')}"),
+            'line continuation (CR)' => $style("*{background:url('\\\r$url')}"),
+            'line continuation in @import' => $style("@import \"\\\n$url\";"),
+            'line continuation in style attribute' => [DOMSanitizer::HTML, "<p style=\"background:url('\\\n$url')\">x</p>"],
+            'line continuation in presentation attribute' => [DOMSanitizer::HTML, "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect fill=\"url('\\\n$url')\"/></svg>"],
+            // A decoded /* is never a comment to the browser, so it cannot hide what follows.
+            'decoded comment opener' => $style("\\2f\\2a{}*{background:url($url)}"),
+            // A decoded quote or paren is never syntax, so it cannot end a string or declaration.
+            'hex-escaped quote' => $style("*{a:\\22;background:image-set(\"$url\" 1x);b:\\22}"),
+            'char-escaped quote' => $style("*{a:\\\";background:image-set(\"$url\" 1x);b:\\\"}"),
+            'escaped paren' => $style("*{a:\\28;--x:\"$url\"}"),
+            'escaped semicolon' => $style("*{--x\\3b:\"$url\"}"),
+            // The URL parser reads a backslash as a slash.
+            'escaped backslash' => $style('*{background:url("/\\\\attacker.example/x.png")}'),
+            'hex-escaped backslashes' => $style('*{background:url("\\5c\\5c attacker.example/x.png")}'),
+            // The URL parser drops tabs and newlines, and trims leading control characters.
+            'raw tab in scheme' => $style("*{background:url(\"ht\ttps://attacker.example/x.png\")}"),
+            'escaped tab in scheme' => $style('*{background:url("ht\\9tps://attacker.example/x.png")}'),
+            'leading control character' => $style("*{background:url(\"\\1 $url\")}"),
+            // An unescaped newline ends a string, so what follows is live CSS again.
+            'unterminated string' => $style("*{a:\"x\n;b:image-set(/*\"*/\"$url\" 1x)}"),
+        ];
+    }
+
+    /** @dataProvider safeCssProvider */
+    public function testSafeCssEscapesArePreserved(string $css): void
+    {
+        $output = (new DOMSanitizer(DOMSanitizer::HTML))->sanitize('<style>' . $css . '</style>');
+        $this->assertStringContainsString('<style>', $output);
+    }
+
+    public static function safeCssProvider(): array
+    {
+        return [
+            'unicode escape in content' => ['a::before{content:"\\201C"}'],
+            'line continuation in content' => ["a::before{content:\"one \\\ntwo\"}"],
+            'escaped quote in content' => ['a::before{content:"say \\"hi\\""}'],
+            'fragment url' => ['rect{fill:url(#gradient)}'],
+            'relative url' => ["p{background:url('img/\\\na.png')}"],
+            'multi-line rules' => ["p {\r\n\tcolor: red;\n}\n"],
+        ];
+    }
 }

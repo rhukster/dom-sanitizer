@@ -18,7 +18,7 @@ class DOMSanitizer
     // Quotes inside url() are optional per CSS Values 4 §4.4, and `data:` is
     // as much a resource load as http:. Requiring a quote here let
     // `url(//evil.example/x)` through on every attribute. (GHSA-jfrr-ch68-f2w9)
-    const EXTERNAL_URL = "/url\s*\(\s*[\"']?\s*(ftp:\/\/|http:\/\/|https:\/\/|\/\/|data:)/i";
+    const EXTERNAL_URL = "/url\s*\(\s*[\"']?[\\x00-\\x20]*(ftp:\/\/|http:\/\/|https:\/\/|\/\/|data:)/i";
     const JAVASCRIPT_ATTR = "/(\s(?:href|xlink\:href|action|cite|poster|src|srcset|background)\s*=\s*\"javascript:.*?\")/i";
     const SNEAKY_ONLOAD = "/(\s(?:href|xlink\:href|action|cite|poster|src|srcset|background)\s*=\s*\"data:.*onload.*?\")/i";
     // Belt-and-braces for the post-serialization pass: any `data:` URL attribute
@@ -372,7 +372,12 @@ class DOMSanitizer
      */
     protected function isExternalUrl($attr_value): bool
     {
-        return preg_match(self::EXTERNAL_URL, $this->normalizeCss((string) $attr_value));
+        foreach ($this->cssViews((string) $attr_value) as $css) {
+            if (preg_match(self::EXTERNAL_URL, $css)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -481,12 +486,28 @@ class DOMSanitizer
      */
     protected function hasDangerousStyleContent(string $css): bool
     {
-        $normalized = $this->normalizeCss($css);
+        foreach ($this->cssViews($css) as $normalized) {
+            if ($this->hasDangerousCssToken($normalized)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
-        if (preg_match('/@import\b/i', $normalized)) {
+    /**
+     * Runs the dangerous-token checks against one normalized view of the CSS.
+     *
+     * @param string $normalized
+     * @return bool
+     */
+    protected function hasDangerousCssToken(string $normalized): bool
+    {
+        // No trailing \b: normalizeCss() drops tabs, so `@import<tab>url(x)` arrives
+        // as `@importurl(x)` and still has to match.
+        if (preg_match('/@import/i', $normalized)) {
             return true;
         }
-        if (preg_match('/url\s*\(\s*["\']?\s*' . self::CSS_EXTERNAL_SCHEME . '/i', $normalized)) {
+        if (preg_match('/url\s*\(\s*["\']?[\x00-\x20]*' . self::CSS_EXTERNAL_SCHEME . '/i', $normalized)) {
             return true;
         }
         if (preg_match('/expression\s*\(/i', $normalized)) {
@@ -508,7 +529,7 @@ class DOMSanitizer
      * Off-origin schemes for the CSS string scan, anchored at the start of the
      * string value so `background: "not a url https://x"` in `content` is ignored.
      */
-    const CSS_STRING_EXTERNAL_SCHEME = '~^\s*(?:https?:|ftp:|//|data:)~i';
+    const CSS_STRING_EXTERNAL_SCHEME = '~^[\x00-\x20]*(?:https?:|ftp:|//|data:)~i';
 
     /**
      * Functions that fetch a resource named by a quoted string argument.
@@ -548,12 +569,15 @@ class DOMSanitizer
                         continue;
                     }
                     if ($css[$i] === $quote) {
+                        $i++; // past the closing quote
                         break;
+                    }
+                    if ($css[$i] === "\n") {
+                        break; // an unescaped newline ends the string for the browser too
                     }
                     $value .= $css[$i];
                     $i++;
                 }
-                $i++; // past the closing quote (or EOF)
 
                 if (preg_match(self::CSS_STRING_EXTERNAL_SCHEME, $value)) {
                     foreach ($funcStack as $fn) {
@@ -616,37 +640,99 @@ class DOMSanitizer
      * discards.
      *
      * Order matters:
-     *  1. Comments are removed first. As far as the checks are concerned a
-     *     comment can sit *inside* a token, so leaving them in means every
-     *     token check can be cut in half.
-     *  2. CSS escapes are decoded, so `\68 ttps:` is seen as the scheme it is.
-     *  3. Comments are stripped a second time, because step 2 can *synthesize*
-     *     one: `\2f\2a` decodes to `/*`, which did not exist during step 1.
+     *  1. Line endings are preprocessed as the browser does (`\r\n`, `\r` and
+     *     `\f` become `\n`), so every later step only has one newline to handle.
+     *  2. Comments are removed. As far as the checks are concerned a comment
+     *     can sit *inside* a token, so leaving them in means every token check
+     *     can be cut in half.
+     *  3. CSS escapes are decoded in a single left-to-right pass, so `\68 ttps:`
+     *     is seen as the scheme it is and an escaped backslash can never pair
+     *     up with the character after it. A backslash followed by a newline is a
+     *     line continuation that the browser removes (GHSA-94fv-h7hv-365q).
+     *     A decoded character is never CSS syntax to the browser, so the ones
+     *     the checks treat as syntax are made inert; see decodedCssChar().
+     *  4. Raw tabs are removed, because the URL parser removes them, so
+     *     `"ht<tab>tps://"` is the same URL as `"https://"`.
      *
-     * Whitespace is deliberately left alone. It is equally inert to browsers,
-     * and collapsing it would risk false positives on legitimate multi-line CSS.
+     * Decoding can spell out `/*` (`\2f\2a`), which is never a comment to a
+     * browser but could look like one to a later comment strip. Callers check
+     * both this text and a comment-stripped copy of it; see cssViews().
+     *
+     * Other whitespace is left alone. It is inert to browsers, and collapsing
+     * it would risk false positives on legitimate multi-line CSS.
      *
      * @param string $css
      * @return string
      */
     protected function normalizeCss(string $css): string
     {
+        $css = str_replace(["\r\n", "\r", "\f"], "\n", $css);
         $css = $this->stripCssComments($css);
 
         $css = preg_replace_callback(
-            '/\\\\([0-9a-fA-F]{1,6})[ \t\n\r\f]?/',
+            '/\\\\(?:(\n)|([0-9a-fA-F]{1,6})[ \t\n]?|(.))/s',
             function ($m) {
-                $code = hexdec($m[1]);
-                if ($code <= 0 || $code > 0x10FFFF) {
+                if (($m[1] ?? '') !== '') {
                     return '';
                 }
-                return mb_chr($code, 'UTF-8') ?: '';
+                if (($m[2] ?? '') !== '') {
+                    $code = hexdec($m[2]);
+                    $char = ($code > 0 && $code <= 0x10FFFF) ? mb_chr($code, 'UTF-8') : false;
+                    return $this->decodedCssChar($char === false ? "\u{FFFD}" : $char);
+                }
+                return $this->decodedCssChar($m[3]);
             },
             $css
         ) ?? $css;
-        $css = preg_replace('/\\\\([^0-9a-fA-F\r\n\f])/', '$1', $css) ?? $css;
 
-        return $this->stripCssComments($css);
+        return str_replace("\t", '', $css);
+    }
+
+    /**
+     * Maps a character produced by a CSS escape to what the checks should see.
+     *
+     * To the browser an escaped character is always part of an identifier,
+     * string or URL, never syntax. The checks walk quotes, parens and
+     * declaration punctuation, so a decoded `"` or `;` left as is would end a
+     * string or a declaration the browser never ended, and hide what follows.
+     * Those become an inert `_`. A decoded backslash becomes `/`, because the
+     * URL parser reads `\` as `/` (`"\\\\evil.example"` is `//evil.example`).
+     * Decoded tab and newlines are dropped, as the URL parser drops them, and
+     * other control characters become a space, as leading ones are trimmed.
+     *
+     * @param string $char
+     * @return string
+     */
+    protected function decodedCssChar(string $char): string
+    {
+        if ($char === '\\') {
+            return '/';
+        }
+        if (strpos("\"'(){};", $char) !== false) {
+            return '_';
+        }
+        if ($char === "\t" || $char === "\n" || $char === "\r") {
+            return '';
+        }
+        if (strlen($char) === 1 && (ord($char) < 0x20 || ord($char) === 0x7F)) {
+            return ' ';
+        }
+        return $char;
+    }
+
+    /**
+     * The views of a CSS value the dangerous-token checks run against: the
+     * normalized text, and the same text with any comment that decoding spelled
+     * out removed. The first is what the browser sees; the second keeps a
+     * decoded `/*` from splitting a token the checks look for.
+     *
+     * @param string $css
+     * @return string[]
+     */
+    protected function cssViews(string $css): array
+    {
+        $normalized = $this->normalizeCss($css);
+        return [$normalized, $this->stripCssComments($normalized)];
     }
 
     /**
@@ -679,7 +765,7 @@ class DOMSanitizer
                     $i += 2;
                     continue;
                 }
-                if ($c === $quote) {
+                if ($c === $quote || $c === "\n") {
                     $quote = null;
                 }
                 $i++;
