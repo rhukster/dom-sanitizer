@@ -782,6 +782,7 @@ XML;
         $sanitizer = new DOMSanitizer(DOMSanitizer::SVG);
         $output = $sanitizer->sanitize($payload);
 
+        $this->assertStringContainsString('<text', $output, 'the document itself must survive the doctype strip');
         $this->assertStringNotContainsString('root:x:', $output, 'must not expand &xxe; into /etc/passwd contents');
         $this->assertStringNotContainsString('<!DOCTYPE', $output, 'DOCTYPE must be stripped');
         $this->assertStringNotContainsString('<!ENTITY', $output, 'ENTITY declarations must be stripped');
@@ -809,6 +810,54 @@ XML;
         // expansion would produce.
         $this->assertLessThan(500, strlen($output), 'output must not balloon from entity expansion');
         $this->assertStringNotContainsString('lollollollol', $output, 'entities must not have expanded');
+    }
+
+    /**
+     * A doctype with an internal subset must be removed whole. Stopping at the
+     * first `>` left the subset's closing `]>` behind, which made SVG parsing
+     * fail (empty output) and showed up as stray text in HTML.
+     *
+     * @dataProvider providerDoctypeInternalSubset
+     */
+    public function testDoctypeInternalSubsetRemovedWhole(int $mode, string $input, string $expected): void
+    {
+        $sanitizer = new DOMSanitizer($mode);
+        $output = $sanitizer->sanitize($input);
+
+        $this->assertStringContainsString($expected, $output);
+        $this->assertStringNotContainsString(']', $output);
+        $this->assertStringNotContainsString('ENTITY', $output);
+    }
+
+    public static function providerDoctypeInternalSubset(): array
+    {
+        return [
+            'svg single-line subset' => [
+                DOMSanitizer::SVG,
+                '<!DOCTYPE svg [<!ENTITY nb "&#160;">]><svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>',
+                '<circle r="4"',
+            ],
+            'svg multi-line subset' => [
+                DOMSanitizer::SVG,
+                "<?xml version=\"1.0\"?>\n<!DOCTYPE svg [\n  <!ENTITY a \"x\">\n  <!ENTITY b \"y\">\n]>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"4\"/></svg>",
+                '<circle r="4"',
+            ],
+            'svg public id plus subset' => [
+                DOMSanitizer::SVG,
+                '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [<!ENTITY a "x">]><svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>',
+                '<circle r="4"',
+            ],
+            'svg quoted bracket in subset' => [
+                DOMSanitizer::SVG,
+                '<!DOCTYPE svg [<!ENTITY a "]>">]><svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>',
+                '<circle r="4"',
+            ],
+            'html subset' => [
+                DOMSanitizer::HTML,
+                '<!DOCTYPE html [<!ENTITY x SYSTEM "file:///etc/passwd">]><html><body><p>hello</p></body></html>',
+                '<p>hello</p>',
+            ],
+        ];
     }
 
     // =========================================================================

@@ -873,7 +873,14 @@ class DOMSanitizer
      */
     private static function stripDoctypeAndEntities(string $content): string
     {
-        $content = preg_replace('/<!DOCTYPE\b[^>]*(?:\[[^\]]*\])?[^>]*>/is', '', $content) ?? $content;
+        // Quoted strings are skipped whole, so a `>` or `]` inside an identifier
+        // or entity value can't end the match early, and the internal subset
+        // `[...]` is consumed before the closing `>`.
+        $content = preg_replace(
+            '/<!DOCTYPE\b(?:[^>\["\']++|"[^"]*+"|\'[^\']*+\')*+(?:\[(?:[^\]"\']++|"[^"]*+"|\'[^\']*+\')*+\])?[^>]*+>/is',
+            '',
+            $content
+        ) ?? $content;
         $content = preg_replace('/<!ENTITY\b[^>]*>/i', '', $content) ?? $content;
         return $content;
     }
