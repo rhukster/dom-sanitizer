@@ -129,7 +129,8 @@ class DOMSanitizer
                     $element->parentNode->removeChild($element);
                     continue;
                 }
-                if ($tag_name_lower === 'style' && $this->hasDangerousStyleContent($element->textContent)) {
+                if ($tag_name_lower === 'style' && ($this->hasDangerousStyleContent($element->textContent) ||
+                        $this->hasMarkupInForeignStyle($element))) {
                     $element->parentNode->removeChild($element);
                     continue;
                 }
@@ -218,6 +219,29 @@ class DOMSanitizer
             if (in_array($target, self::URL_ATTRS, true) ||
                 $target === 'style' || $target === 'xmlns' ||
                 $parts[0] === 'xmlns' || strncmp($target, 'on', 2) === 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * libxml's HTML parser always treats <style> as raw text, and saveHTML()
+     * writes that text back unescaped. A browser parses a <style> inside
+     * <svg> or <math> as foreign content, so a tag in its text becomes a live
+     * element (an <img> breaks out into HTML). Text that would tokenize as
+     * markup there is rejected; a bare `<` such as `(width < 600px)` is still
+     * plain text to the browser. (GHSA-g55m-q82j-v95j)
+     */
+    protected function hasMarkupInForeignStyle(\DOMElement $element): bool
+    {
+        if ($this->document_type !== self::HTML || !preg_match('~<[a-z!/?]~i', $element->textContent)) {
+            return false;
+        }
+
+        for ($node = $element->parentNode; $node instanceof \DOMElement; $node = $node->parentNode) {
+            if (in_array(strtolower($node->localName), ['svg', 'math'], true)) {
                 return true;
             }
         }

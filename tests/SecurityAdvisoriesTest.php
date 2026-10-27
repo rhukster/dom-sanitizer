@@ -181,4 +181,36 @@ final class SecurityAdvisoriesTest extends TestCase
             'multi-line rules' => ["p {\r\n\tcolor: red;\n}\n"],
         ];
     }
+
+    /** @dataProvider foreignStyleMarkupProvider */
+    public function testMarkupInForeignStyleIsRemoved(string $input): void
+    {
+        $output = (new DOMSanitizer(DOMSanitizer::HTML))->sanitize($input);
+        $this->assertStringNotContainsString('onerror', $output);
+    }
+
+    public static function foreignStyleMarkupProvider(): array
+    {
+        // GHSA-g55m-q82j-v95j
+        return [
+            'reported SVG' => ['<svg><style><img src=x onerror="alert(1)"></style></svg>'],
+            'reported MathML' => ['<math><style><img src=x onerror="alert(1)"></style></math>'],
+            'nested in SVG group' => ['<svg><g><style><img src=x onerror="alert(1)"></style></g></svg>'],
+            'uppercase tag' => ['<SVG><STYLE><IMG SRC=x ONERROR="alert(1)"></STYLE></SVG>'],
+            'closing style inside comment' => ['<svg><style><!--</style><img src=x onerror="alert(1)">--></style></svg>'],
+        ];
+    }
+
+    public function testSafeForeignStyleIsPreserved(): void
+    {
+        $output = (new DOMSanitizer(DOMSanitizer::HTML))->sanitize('<svg><style>.a{fill:red} @media (width < 600px){.a{fill:blue}}</style></svg>');
+        $this->assertStringContainsString('<style>.a{fill:red} @media (width < 600px){.a{fill:blue}}</style>', $output);
+    }
+
+    public function testHtmlStyleWithMarkupIsPreserved(): void
+    {
+        // Outside foreign content both parsers keep <style> as raw text.
+        $output = (new DOMSanitizer(DOMSanitizer::HTML))->sanitize('<div><style>a::before{content:"<b>"}</style></div>');
+        $this->assertStringContainsString('content:"<b>"', $output);
+    }
 }
